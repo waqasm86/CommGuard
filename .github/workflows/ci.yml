@@ -1,0 +1,29 @@
+name: CPU checks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install project and test tools
+        run: |
+          python -m pip install --upgrade pip setuptools
+          python -m pip install --no-build-isolation --no-deps -e .
+          python -m pip install "pytest>=8" "ruff>=0.9" "tomli>=2; python_version < '3.11'"
+      - name: Lint
+        run: ruff check src tests
+      - name: CPU-safe tests
+        run: pytest -m "not gpu and not multigpu and not network and not slow"

@@ -1,0 +1,8 @@
+{
+  "profile": "smoke",
+  "repetitions": 1,
+  "sampling_interval_s": 1.0,
+  "calibration_payload_mib": [1, 4, 16, 64],
+  "timeout_s": 180,
+  "negative_calibration_mode": false
+}
