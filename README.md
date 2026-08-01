@@ -24,6 +24,11 @@ The SDK distinguishes measured observations, evidence-supported inferences,
 untested hypotheses, and out-of-scope claims. A failed calibration or a
 classifier that does not generalize is a valid research result.
 
+The current project is a validated dual-GPU monitoring and calibration
+prototype. It does not yet establish that CommGuard detects LLM training versus
+inference: the Kaggle benign corpus and grouped detector evaluation still need
+to be executed successfully.
+
 ## Kaggle quick start
 
 CommGuard is distributed from GitHub and is not published to PyPI. To install
@@ -47,6 +52,18 @@ profiles.
 If Kaggle Internet access is disabled, upload a snapshot of this repository as
 a Kaggle dataset and change the notebook's `REPO` path to that read-only
 dataset directory.
+
+For the repetition-aware study, run these notebooks in order:
+
+1. [`commguard_calibration_v2.ipynb`](notebooks/commguard_calibration_v2.ipynb)
+2. [`commguard_benign_corpus.ipynb`](notebooks/commguard_benign_corpus.ipynb)
+3. [`commguard_detector_evaluation.ipynb`](notebooks/commguard_detector_evaluation.ipynb)
+
+Calibration can be `supported`, `partially_supported`, or `not_supported`.
+Between Kaggle sessions, download each notebook's exported evidence archive and
+upload it as a Kaggle Dataset for the next notebook. See the
+[experiment roadmap](docs/NEXT_KAGGLE_EXPERIMENTS.md) for the artifact flow and
+claim boundary.
 
 ## Local checkout
 
@@ -97,6 +114,7 @@ See `docs/` for architecture, artifact contracts, methodology, safety, and
 reproducibility details:
 
 - [Kaggle dual-T4 instructions](docs/kaggle-dual-t4.md)
+- [Next Kaggle experiments](docs/NEXT_KAGGLE_EXPERIMENTS.md)
 - [Artifact contracts](docs/artifacts.md)
 - [Methodology](docs/methodology.md)
 - [Limitations and untested behavior](docs/limitations.md)

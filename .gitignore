@@ -11,3 +11,6 @@ dist/
 artifacts/*
 !artifacts/README.md
 notebooks/.ipynb_checkpoints/
+Project-Monitoring-GPU-Communication.txt
+commguard-*.tar.gz
+commguard-review-bundle-*

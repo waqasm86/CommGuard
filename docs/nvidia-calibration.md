@@ -18,3 +18,9 @@ Potential commands after following each project's official build instructions:
 Do not automatically install another CUDA runtime or compile NCCL. Do not
 equate nccl-tests algorithm bandwidth, bus bandwidth, tensor payload bytes,
 PyTorch event timing, or NVML PCIe traffic readings.
+
+CommGuard's SDK calibration uses repeated payload groups and an idle-derived
+capture threshold before interpreting aggregate rank correlation. A
+`partially_supported` result means only the listed payload groups were captured
+reliably. NVML PCIe values remain PCIe traffic readings; they are not direct
+NCCL byte counts.

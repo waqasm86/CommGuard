@@ -26,3 +26,10 @@ Gloo, one-GPU, and DataParallel execution. Rank 0 creates a participation
 summary only after both create-only rank result files validate.
 
 No successful Kaggle GPU run is included in this repository.
+
+For the staged research update, use
+[`NEXT_KAGGLE_EXPERIMENTS.md`](NEXT_KAGGLE_EXPERIMENTS.md) and run calibration,
+benign-corpus collection, then grouped detector evaluation. Download the output
+bundle after each session and upload it as a Kaggle Dataset for the next stage.
+No training-versus-inference performance claim is supported until the final
+evaluation notebook creates a non-empty grouped evaluation artifact.

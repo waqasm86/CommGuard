@@ -9,10 +9,15 @@ Sampling defaults to 1 Hz. The collector records actual intervals, jitter,
 overruns, field missingness, and a conservative sampler duty fraction. Short
 controls can compare 1, 2, and 10 Hz; this is not enabled during normal runs.
 
-Calibration sweeps nominal collective payloads and tests rank correlation plus
-signal dynamic range. These thresholds are pragmatic gates, not universal
-physical laws. Calibration failure prevents standard/extended detector
-collection unless explicit negative-calibration research mode is selected.
+Calibration records idle-baseline observations and repeated nominal collective
+payload groups. It tests per-payload capture rate and repetition count as well
+as median-signal rank correlation and dynamic range. Per-payload summaries also
+report mean, median absolute deviation, and coefficient of variation. These
+thresholds are pragmatic gates, not universal physical laws. Calibration can be
+`supported`, `partially_supported`, or `not_supported`; partial support applies
+only to the reported reliable payload groups. Calibration failure prevents
+standard/extended detector collection unless explicit negative-calibration
+research mode is selected.
 
 Features include distribution summaries, variation, slopes, autocorrelation,
 idle/duty fractions, PCIe totals/ratios, missingness, cross-GPU divergence, and

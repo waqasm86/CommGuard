@@ -283,9 +283,9 @@ def validate_artifact(data: Mapping[str, Any]) -> None:
             ("status", "observations", "falsification_reasons"),
         )
         _require(
-            data["status"] in {"supported", "not_supported"},
+            data["status"] in {"supported", "partially_supported", "not_supported"},
             "status",
-            "must be supported or not_supported",
+            "must be supported, partially_supported, or not_supported",
         )
         _require(isinstance(data["observations"], list), "observations", "must be an array")
     elif kind == "experiment_summary":

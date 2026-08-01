@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Add repetition-aware calibration with idle-baseline capture gating.
+- Report per-payload median, mean, median absolute deviation, coefficient of
+  variation, capture count, capture rate, and reliability.
+- Add the `partially_supported` status and explicit reliable/unreliable payload
+  groups while retaining the existing correlation and dynamic-range keys.
+- Add staged Kaggle calibration, benign-corpus, and grouped detector-evaluation
+  notebooks with an experiment roadmap.
+- Add calibration repeatability and falsification edge-case tests.
+
 ## 0.1.0 - 2026-07-30
 
 - Initial CommGuard research SDK.
