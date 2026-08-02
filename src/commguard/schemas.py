@@ -243,9 +243,7 @@ def validate_artifact(data: Mapping[str, Any]) -> None:
         _utc_timestamp(str(data["created_at_utc"]), "created_at_utc")
         _require(isinstance(data["gpus"], list), "gpus", "must be an array")
         _require(isinstance(data["readiness"], dict), "readiness", "must be an object")
-        _require(
-            isinstance(data["strict_ready"], bool), "strict_ready", "must be a boolean"
-        )
+        _require(isinstance(data["strict_ready"], bool), "strict_ready", "must be a boolean")
     elif kind == "feature_row":
         _require_fields(
             data,

@@ -54,9 +54,7 @@ def _gpu_uuid(local_rank: int) -> str:
         timeout=5,
     )
     return (
-        result.stdout.strip()
-        if result.returncode == 0
-        else f"unavailable:{result.stderr.strip()}"
+        result.stdout.strip() if result.returncode == 0 else f"unavailable:{result.stderr.strip()}"
     )
 
 
@@ -199,9 +197,7 @@ def _run_ddp_training(
                 if not sync:
                     with _precision_context(torch, precision):
                         logits = model(tokens[:, :-1])
-                        loss = loss_fn(
-                            logits.reshape(-1, vocab_size), tokens[:, 1:].reshape(-1)
-                        )
+                        loss = loss_fn(logits.reshape(-1, vocab_size), tokens[:, 1:].reshape(-1))
                 else:
                     logits = model(tokens[:, :-1])
                     loss = loss_fn(logits.reshape(-1, vocab_size), tokens[:, 1:].reshape(-1))
@@ -363,9 +359,7 @@ def _run_control(
                 dist.barrier()
                 if writer.rank == 0:
                     source = torch.ones(element_count, dtype=torch.float32, device="cuda:0")
-                    destination = torch.empty(
-                        element_count, dtype=torch.float32, device="cuda:1"
-                    )
+                    destination = torch.empty(element_count, dtype=torch.float32, device="cuda:1")
                     started = time.perf_counter()
                     destination.copy_(source, non_blocking=True)
                     torch.cuda.synchronize(1)
@@ -466,8 +460,7 @@ def _run_calibration(
                 raise ValueError(f"unsupported collective {collective!r}")
             if collective != "all_gather" and float(tensor[0]) != expected:
                 raise RuntimeError(
-                    f"{collective} correctness failed: got {float(tensor[0])}, "
-                    f"expected {expected}"
+                    f"{collective} correctness failed: got {float(tensor[0])}, expected {expected}"
                 )
         writer.emit("heartbeat", step=step, collective=collective)
         remaining = burst_interval_s - (time.perf_counter() - burst_started)
@@ -515,8 +508,7 @@ def main() -> int:
             raise RuntimeError(f"CommGuard requires WORLD_SIZE=2, got {world_size}")
         if torch.cuda.device_count() != 2:
             raise RuntimeError(
-                f"CommGuard requires exactly 2 CUDA devices, "
-                f"got {torch.cuda.device_count()}"
+                f"CommGuard requires exactly 2 CUDA devices, got {torch.cuda.device_count()}"
             )
         if not dist.is_nccl_available():
             raise RuntimeError("PyTorch NCCL backend is unavailable")

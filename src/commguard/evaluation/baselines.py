@@ -180,9 +180,7 @@ def _simple_rule(train: Any, test: Any, columns: list[str]) -> tuple[Any, Any, d
     candidates = [
         column
         for column in columns
-        if "pcie_total_mean" in column or (
-            "pcie_" in column and column.endswith("__mean")
-        )
+        if "pcie_total_mean" in column or ("pcie_" in column and column.endswith("__mean"))
     ]
     if not candidates:
         candidates = columns[:1]
@@ -190,9 +188,7 @@ def _simple_rule(train: Any, test: Any, columns: list[str]) -> tuple[Any, Any, d
     test_signal = test[candidates].mean(axis=1, skipna=True)
     training_median = float(signal[train["_target"] == 1].median())
     nontraining_median = float(signal[train["_target"] == 0].median())
-    if not all(
-        value == value for value in (training_median, nontraining_median)
-    ):
+    if not all(value == value for value in (training_median, nontraining_median)):
         raise ValueError("simple-rule PCIe signal is entirely missing in a training class")
     threshold = (training_median + nontraining_median) / 2
     direction = 1 if training_median >= nontraining_median else -1
@@ -200,11 +196,15 @@ def _simple_rule(train: Any, test: Any, columns: list[str]) -> tuple[Any, Any, d
     predictions = ((finite - threshold) * direction >= 0).astype(int)
     scale = max(float(np.nanstd(finite)), 1.0)
     probabilities = 1 / (1 + np.exp(-direction * (finite - threshold) / scale))
-    return predictions, probabilities, {
-        "columns": candidates,
-        "threshold": threshold,
-        "direction": "higher_is_training" if direction == 1 else "lower_is_training",
-    }
+    return (
+        predictions,
+        probabilities,
+        {
+            "columns": candidates,
+            "threshold": threshold,
+            "direction": "higher_is_training" if direction == 1 else "lower_is_training",
+        },
+    )
 
 
 def _evaluate_ablation(
@@ -280,9 +280,7 @@ def _evaluate_ablation(
         "upper_threshold": upper,
         "coverage": float(decided.mean()),
         "metrics_on_decided": (
-            _metrics(y_test.to_numpy()[decided], abstained_prediction)
-            if decided.any()
-            else None
+            _metrics(y_test.to_numpy()[decided], abstained_prediction) if decided.any() else None
         ),
     }
     per_family: dict[str, Any] = {}
@@ -293,9 +291,7 @@ def _evaluate_ablation(
     output["per_family"] = per_family
     run_probabilities: dict[str, list[float]] = defaultdict(list)
     run_targets: dict[str, int] = {}
-    for run_id, probability, target in zip(
-        test["run_id"], best_probability, y_test, strict=True
-    ):
+    for run_id, probability, target in zip(test["run_id"], best_probability, y_test, strict=True):
         run_probabilities[str(run_id)].append(float(probability))
         run_targets[str(run_id)] = int(target)
     run_ids = sorted(run_probabilities)
@@ -304,9 +300,7 @@ def _evaluate_ablation(
         for run_id in run_ids
     ]
     prediction_by_run = dict(zip(run_ids, run_prediction, strict=True))
-    output["run_level"] = _metrics(
-        [run_targets[run_id] for run_id in run_ids], run_prediction
-    )
+    output["run_level"] = _metrics([run_targets[run_id] for run_id in run_ids], run_prediction)
     output["run_level"]["balanced_accuracy_bootstrap"] = _bootstrap_run_balanced_accuracy(
         run_ids,
         run_targets,
@@ -321,9 +315,7 @@ def _heldout_adversarial_families(frame: Any, columns: list[str]) -> dict[str, A
     from sklearn.pipeline import make_pipeline
 
     output: dict[str, Any] = {}
-    families = sorted(
-        frame.loc[frame["designation"] == "adversarial", "workload_family"].unique()
-    )
+    families = sorted(frame.loc[frame["designation"] == "adversarial", "workload_family"].unique())
     for family in families:
         test = frame.loc[frame["workload_family"] == family]
         train = frame.loc[frame["workload_family"] != family]
@@ -399,13 +391,10 @@ def evaluate_detector(
     root = Path(input_root)
     calibration_paths = sorted((root / "results").glob("calibration-*.json"))
     calibration = (
-        json.loads(calibration_paths[-1].read_text(encoding="utf-8"))
-        if calibration_paths
-        else None
+        json.loads(calibration_paths[-1].read_text(encoding="utf-8")) if calibration_paths else None
     )
-    if (
-        not negative_calibration_mode
-        and (calibration is None or calibration.get("status") != "supported")
+    if not negative_calibration_mode and (
+        calibration is None or calibration.get("status") != "supported"
     ):
         reason = "missing" if calibration is None else str(calibration.get("status"))
         raise CalibrationError(
@@ -462,9 +451,7 @@ def evaluate_detector(
         "leakage_audit": leakage,
         "ablations": results,
         "by_window_seconds": by_window_seconds,
-        "heldout_adversarial_families": _heldout_adversarial_families(
-            frame, ablations["combined"]
-        ),
+        "heldout_adversarial_families": _heldout_adversarial_families(frame, ablations["combined"]),
         "adversarial_efficiency_cost": _adversarial_efficiency(root),
         "limitations": [
             "Scores apply only to saved workload families and recorded sessions.",

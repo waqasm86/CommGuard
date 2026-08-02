@@ -24,10 +24,21 @@ The SDK distinguishes measured observations, evidence-supported inferences,
 untested hypotheses, and out-of-scope claims. A failed calibration or a
 classifier that does not generalize is a valid research result.
 
-The current project is a validated dual-GPU monitoring and calibration
-prototype. It does not yet establish that CommGuard detects LLM training versus
-inference: the Kaggle benign corpus and grouped detector evaluation still need
-to be executed successfully.
+## Current evidence status
+
+**Observed limitation:** the current pilot's feature coverage is DDP versus idle
+only. Although 18/18 planned benign runs completed, the saved feature artifact
+contains 16 five-second windows from eight DDP/idle runs; inference, compute, and
+host-transfer runs were too short after warmup. Calibration-stage idle controls
+also entered the merged derived set.
+
+**Measured/derived negative result:** PCIe-only detection missed the held-out
+training run (run-level balanced accuracy 0.5, training recall 0, false-negative
+rate 1.0) in a test containing only two runs. Combined and non-PCIe diagnostic
+features separated that tiny pilot, but current generalization evidence is
+insufficient. CommGuard has not established reliable training-versus-inference
+detection or adversarial robustness. See the evidence hash inventory and
+coverage-failure analysis before interpreting any historical notebook output.
 
 ## Kaggle quick start
 
@@ -117,6 +128,7 @@ reproducibility details:
 - [Next Kaggle experiments](docs/NEXT_KAGGLE_EXPERIMENTS.md)
 - [Artifact contracts](docs/artifacts.md)
 - [Methodology](docs/methodology.md)
+- [Canonical versus executed notebooks](docs/notebook-policy.md)
 - [Limitations and untested behavior](docs/limitations.md)
 - [Reproducibility](docs/reproducibility.md)
 

@@ -153,18 +153,14 @@ def test_duplicate_payloads_are_grouped_and_sorted_numerically() -> None:
 
 
 def test_low_correlation_is_not_supported() -> None:
-    result = analyze_calibration(
-        [row(1, 3_000_000), row(4, 1_000_000), row(16, 2_000_000)]
-    )
+    result = analyze_calibration([row(1, 3_000_000), row(4, 1_000_000), row(16, 2_000_000)])
 
     assert result["status"] == "not_supported"
     assert "rank correlation" in " ".join(result["falsification_reasons"])
 
 
 def test_small_dynamic_range_is_not_supported() -> None:
-    result = analyze_calibration(
-        [row(1, 2_000_000), row(4, 2_050_000), row(16, 2_100_000)]
-    )
+    result = analyze_calibration([row(1, 2_000_000), row(4, 2_050_000), row(16, 2_100_000)])
 
     assert result["status"] == "not_supported"
     assert "dynamic range" in " ".join(result["falsification_reasons"])

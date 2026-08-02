@@ -260,8 +260,7 @@ def check_environment(
         store = ArtifactStore(output)
         store.initialize()
         store.write_json(
-            "environment/preflight-"
-            f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')}.json",
+            f"environment/preflight-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')}.json",
             report,
         )
     if strict and not strict_ready:

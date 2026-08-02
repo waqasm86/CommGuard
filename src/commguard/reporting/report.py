@@ -148,8 +148,7 @@ def generate_report(
             "**Observed:** Complete-strategy holdouts: "
             + "; ".join(
                 (
-                    f"{family}: detection "
-                    f"{result.get('training_detection_rate', 'unmeasured')}"
+                    f"{family}: detection {result.get('training_detection_rate', 'unmeasured')}"
                     if result.get("status") == "evaluated"
                     else f"{family}: insufficient data"
                 )

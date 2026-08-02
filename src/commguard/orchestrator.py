@@ -68,11 +68,7 @@ def _pcie_observation(samples: list[Any], run_directory: Path) -> dict[str, Any]
                 timestamp = int(event["monotonic_ns"])
                 phase_end = timestamp if phase_end is None else max(phase_end, timestamp)
     measured_samples = (
-        [
-            sample
-            for sample in samples
-            if phase_start <= sample.monotonic_ns <= phase_end
-        ]
+        [sample for sample in samples if phase_start <= sample.monotonic_ns <= phase_end]
         if phase_start is not None and phase_end is not None
         else samples
     )
@@ -307,12 +303,8 @@ def run_calibration_sweep(
                     "participation_valid": outcome["manifest"]["participation_valid"],
                     "exit_status": outcome["manifest"]["exit_status"],
                     "pcie_supported": outcome["pcie_supported"],
-                    "pcie_total_mean_bytes_per_s": outcome[
-                        "pcie_total_mean_bytes_per_s"
-                    ],
-                    "pcie_total_median_bytes_per_s": outcome[
-                        "pcie_total_median_bytes_per_s"
-                    ],
+                    "pcie_total_mean_bytes_per_s": outcome["pcie_total_mean_bytes_per_s"],
+                    "pcie_total_median_bytes_per_s": outcome["pcie_total_median_bytes_per_s"],
                     "pcie_sample_count": outcome["pcie_sample_count"],
                 }
             )
@@ -356,8 +348,7 @@ def run_matrix(
         and not negative_calibration_mode
     ):
         raise CalibrationError(
-            "standard/extended matrix blocked by negative calibration; "
-            f"see {calibration['path']}"
+            f"standard/extended matrix blocked by negative calibration; see {calibration['path']}"
         )
     names = profile_workloads(profile)
     names = [name for name in names if not name.startswith("collective_")]

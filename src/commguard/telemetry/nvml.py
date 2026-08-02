@@ -42,8 +42,7 @@ class NvmlBackend:
         self.nvml = pynvml
         pynvml.nvmlInit()
         self.handles = [
-            pynvml.nvmlDeviceGetHandleByIndex(index)
-            for index in range(pynvml.nvmlDeviceGetCount())
+            pynvml.nvmlDeviceGetHandleByIndex(index) for index in range(pynvml.nvmlDeviceGetCount())
         ]
 
     def shutdown(self) -> None:
@@ -89,9 +88,7 @@ class NvmlBackend:
                     False,
                     f"{type(utilization_error).__name__}: {utilization_error}",
                 )
-            return FieldReading(
-                int(getattr(utilization, attribute)), FIELD_UNITS[name], True
-            )
+            return FieldReading(int(getattr(utilization, attribute)), FIELD_UNITS[name], True)
 
         fields = {
             "gpu_utilization_pct": utilization_field("gpu_utilization_pct", "gpu"),
@@ -239,9 +236,7 @@ class TelemetryCollector:
     def diagnostics(self) -> CollectorDiagnostics:
         intervals = [
             current - previous
-            for previous, current in zip(
-                self._cycle_starts, self._cycle_starts[1:], strict=False
-            )
+            for previous, current in zip(self._cycle_starts, self._cycle_starts[1:], strict=False)
         ]
         missing = {name: 0 for name in TELEMETRY_FIELDS}
         for sample in self.samples:
@@ -263,9 +258,7 @@ class TelemetryCollector:
             collector_wall_duty_fraction=(
                 min(1.0, statistics.fmean(costs) / self.interval_s) if costs else None
             ),
-            field_missing_fraction={
-                name: count / denominator for name, count in missing.items()
-            },
+            field_missing_fraction={name: count / denominator for name, count in missing.items()},
         )
 
 
@@ -328,16 +321,12 @@ def measure_runtime_overhead(
         "baseline_wall_median_s": baseline_wall_median,
         "collected_wall_median_s": collected_wall_median,
         "wall_slowdown_fraction": (
-            collected_wall_median / baseline_wall_median - 1
-            if baseline_wall_median
-            else None
+            collected_wall_median / baseline_wall_median - 1 if baseline_wall_median else None
         ),
         "baseline_process_cpu_median_s": baseline_cpu_median,
         "collected_process_cpu_median_s": collected_cpu_median,
         "process_cpu_increase_fraction": (
             collected_cpu_median / baseline_cpu_median - 1 if baseline_cpu_median else None
         ),
-        "method": (
-            "median repeated runtime comparison; callable order baseline then collected"
-        ),
+        "method": ("median repeated runtime comparison; callable order baseline then collected"),
     }

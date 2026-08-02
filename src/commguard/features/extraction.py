@@ -59,10 +59,7 @@ def _correlation(left: list[float], right: list[float]) -> float | None:
     if denominator == 0:
         return None
     return (
-        sum(
-            (x - left_mean) * (y - right_mean)
-            for x, y in zip(left, right, strict=True)
-        )
+        sum((x - left_mean) * (y - right_mean) for x, y in zip(left, right, strict=True))
         / denominator
     )
 
@@ -75,9 +72,9 @@ def _slope(values: list[float], times: list[float]) -> float | None:
     denominator = sum((value - x_mean) ** 2 for value in times)
     if denominator == 0:
         return None
-    return sum(
-        (x - x_mean) * (y - y_mean) for x, y in zip(times, values, strict=True)
-    ) / denominator
+    return (
+        sum((x - x_mean) * (y - y_mean) for x, y in zip(times, values, strict=True)) / denominator
+    )
 
 
 def _stats(values: list[float], times: list[float]) -> dict[str, float | None]:
@@ -175,27 +172,21 @@ def _feature_window(
             values_by_gpu[(gpu, field)] = values
             for statistic_name, value in _stats(values, times).items():
                 row[f"gpu{gpu}__{field}__{statistic_name}"] = value
-            row[f"gpu{gpu}__{field}__missing_fraction"] = 1.0 - (
-                len(values) / len(selected[gpu])
-            )
+            row[f"gpu{gpu}__{field}__missing_fraction"] = 1.0 - (len(values) / len(selected[gpu]))
         utilization = values_by_gpu[(gpu, "gpu_utilization_pct")]
         row[f"gpu{gpu}__utilization_idle_fraction"] = (
-            sum(value <= 5 for value in utilization) / len(utilization)
-            if utilization
-            else None
+            sum(value <= 5 for value in utilization) / len(utilization) if utilization else None
         )
         row[f"gpu{gpu}__utilization_duty_cycle"] = (
-            sum(value > 5 for value in utilization) / len(utilization)
-            if utilization
-            else None
+            sum(value > 5 for value in utilization) / len(utilization) if utilization else None
         )
         tx = values_by_gpu[(gpu, "pcie_tx_bytes_per_s")]
         rx = values_by_gpu[(gpu, "pcie_rx_bytes_per_s")]
         if tx and rx:
             count = min(len(tx), len(rx))
-            row[f"gpu{gpu}__pcie_total_mean_bytes_per_s"] = statistics.fmean(
-                tx[:count] + rx[:count]
-            ) * 2
+            row[f"gpu{gpu}__pcie_total_mean_bytes_per_s"] = (
+                statistics.fmean(tx[:count] + rx[:count]) * 2
+            )
             rx_mean = statistics.fmean(rx[:count])
             row[f"gpu{gpu}__pcie_tx_rx_ratio"] = (
                 statistics.fmean(tx[:count]) / rx_mean if rx_mean else None
@@ -306,16 +297,10 @@ def extract_features(
         )
     labels = {str(row["target_label"]) for row in rows}
     lengths_by_label = {
-        label: {
-            float(row["window_seconds"])
-            for row in rows
-            if str(row["target_label"]) == label
-        }
+        label: {float(row["window_seconds"]) for row in rows if str(row["target_label"]) == label}
         for label in labels
     }
-    common_lengths = (
-        set.intersection(*lengths_by_label.values()) if lengths_by_label else set()
-    )
+    common_lengths = set.intersection(*lengths_by_label.values()) if lengths_by_label else set()
     rows = [row for row in rows if float(row["window_seconds"]) in common_lengths]
     if output is not None:
         store = ArtifactStore(output)

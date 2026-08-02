@@ -11,6 +11,12 @@ dist/
 artifacts/*
 !artifacts/README.md
 notebooks/.ipynb_checkpoints/
+# Executed historical copies use hyphenated names. Preserve them locally;
+# canonical source notebooks use underscore-separated names.
+notebooks/commguard-*.ipynb
+# Local evidence and review bundles are indexed by hash in documentation, not Git.
+tar-files/
+*.zip
 Project-Monitoring-GPU-Communication.txt
 commguard-*.tar.gz
 commguard-review-bundle-*

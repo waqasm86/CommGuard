@@ -69,7 +69,5 @@ def test_timeout_terminates_process_tree(tmp_path) -> None:
         raise_on_failure=False,
     )
     assert outcome["manifest"]["exit_status"] in {"timeout", "failed"}
-    launch = json.loads(
-        (tmp_path / "runs" / outcome["run_id"] / "launch.json").read_text()
-    )
+    launch = json.loads((tmp_path / "runs" / outcome["run_id"] / "launch.json").read_text())
     assert launch["cleanup_complete"]

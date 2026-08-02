@@ -1,0 +1,176 @@
+# CommGuard research completion ExecPlan
+
+Living plan started: `2026-08-02T12:50:25+05:00`
+
+## Purpose and success definition
+
+Advance the authoritative CommGuard checkout into a truthful, CPU-testable research platform for communication-correlated telemetry studies. Completion means that repository state, schemas, coverage diagnostics, grouped evaluation, local central-monitoring simulation, bounded benign/adversarial workload orchestration, canonical Kaggle notebooks, evidence-grounded documentation, and GitHub handoff materials satisfy the prompt-package gates to the extent possible on this Ubuntu host. GPU, Kaggle, and physical multi-node claims remain pending until actual immutable artifacts exist.
+
+Observable success:
+
+- a coherent underscore-named, output-free canonical notebook set and preserved executed evidence hashes;
+- dependency-free CPU import, green CPU-safe tests, green Ruff check/format, coherent build/import/CLI checks;
+- explicit session/corpus/run/node/environment semantics with legacy ambiguity surfaced;
+- one structured coverage record per planned run, timestamp-aligned cross-GPU features, and a strict primary coverage gate;
+- leak-resistant split selection with actual strategy metadata and train-only preprocessing/model selection;
+- signed/versioned node telemetry batches, replay/staleness controls, offline two-agent integration tests, and optional online reference code without a physical-deployment claim;
+- duration-aware benign and bounded adversarial workload definitions with CPU orchestration/correctness tests;
+- canonical unexecuted calibration, benign, detector, and adversarial Kaggle notebooks using SDK APIs and immutable provenance gates;
+- an evidence index, research/report templates, current-results disclosure, completion report, and exact non-pushing GitHub handoff commands.
+
+## Baseline
+
+The full timestamped baseline is `.agent/state/20260802T125025+0500/baseline.md`.
+
+- Git: `main` at `1e790895ae3bd0919dde0f383e78fb14f767d359`, tracking `origin/main`.
+- Pre-existing worktree: four tracked notebook deletions, three untracked notebook replacements, and five untracked archives.
+- CPU tests: 56 passed, one repository notebook-path test failed, five hardware tests deselected.
+- Ruff: `ruff check src tests` passes; root check and formatting fail, substantially because live executed notebooks are included and tracked Python predates the current Ruff formatter.
+- Build: unavailable because the local environment lacks the `build` module.
+- Evidence: real dual-T4 calibration and 18-run benign collection exist, but primary derived coverage is DDP-versus-idle only. PCIe-only detection missed the held-out training run.
+
+## Source-grounded research constraints
+
+The current working tree and local evidence outrank the completion package. The intended project is defensive verification research: implement content-agnostic communication telemetry, test broad benign training/inference/hard negatives, then evaluate bounded adversarial structures. Current evidence is a single-host dual-T4 pilot, not a two-node server-grade validation.
+
+Every result statement will use one of: measured, derived, observed limitation, inference, hypothesis, planned, or pending hardware validation. No text may claim reliable LLM-training detection, adversarial robustness, faithful DiLoCo reproduction, proven privacy, or physical multi-node/server-grade validation. Application answers remain for the applicant to write independently.
+
+Telemetry must not contain prompts, examples, tokens, model weights, credentials, or unrelated user data. NVML PCIe readings remain explicitly distinct from direct NCCL byte counts and from GPU-attributed network traffic.
+
+## Milestones
+
+### Phase 00 — Preflight, state preservation, and ExecPlan
+
+Acceptance: live Git/tool/notebook/archive/evidence state recorded; every uncommitted path accounted for; CPU baseline captured; plan and timestamped inventory exist; safe feature branch created without discarding changes.
+
+### Phase 01 — Repository repair and canonical notebooks
+
+Acceptance: root `AGENTS.md`; documented underscore naming; output-free canonical notebooks; executed originals preserved as local evidence with hashes; `.gitignore`, metadata, CLI/import/build policy, and repository tests coherent; CPU tests green.
+
+### Phase 02 — Provenance, corpus membership, and schema migration
+
+Acceptance: explicit experiment session, corpus/collection, run, node, environment, source, dirty-state, notebook, input hash, and seed semantics; corpus manifest allow-list; calibration leakage prevention; tested legacy loader with ambiguous-grouping flag; schema/migration docs.
+
+### Phase 03 — Feature coverage, time alignment, and duration controls
+
+Acceptance: extraction result contains features plus one coverage record per planned run; all required reason codes; exact duration/row/window diagnostics; deterministic tolerance-based timestamp pairing; strict family/minimum-run primary gate; diagnostic short windows remain separate; too-short and leakage regressions tested; duration-aware stop conditions and measured interval provenance.
+
+### Phase 04 — Grouped splits and honest evaluation
+
+Acceptance: validated session → deterministic stratified whole-run hierarchy plus family/config holdouts; no one-class primary split; whole runs never cross splits; actual strategy/groups persisted; train-only imputation/scaling/selection/calibration; communication-only primary metrics with run/window/per-family counts, hard-negative FPRs, abstention, and small-sample warnings.
+
+### Phase 05 — Node agent and central monitoring reference architecture
+
+Acceptance: versioned batches/heartbeats/acks/decisions/errors; HMAC/integrity, payload limit, replay/order/clock/staleness checks; privacy allow-list; offline deterministic transport; local two-agent central aggregation test; optional online transport remains isolated; physical deployment labeled pending.
+
+### Phase 06 — Broad benign workload matrix
+
+Acceptance: stable family/config IDs for DDP, independent prefill/decode, synchronized inference, compute, host transfer, model/checkpoint load, optional peer copy, and idle; duration-aware plans; CPU orchestration smoke tests; T4-safe pilot and opt-in expansion; coverage gate precedes detector metrics.
+
+### Phase 07 — Adversarial workloads and held-out-family evaluation
+
+Acceptance: bounded metadata/interface and code paths for gradient accumulation, periodic local SGD, DiLoCo-inspired sparse synchronization, segmentation, idle/burst shaping, randomized synchronization, mixed phases, and synthetic decoys; disabled by default; sync/state correctness tests; efficiency/quality proxy schema; untouched final holdout/hardening round definitions.
+
+### Phase 08 — Kaggle notebooks
+
+Acceptance: four canonical unexecuted notebooks parse, contain no SDK implementation duplication, have strict two-T4/environment evidence, immutable source/archive checks, safe extraction, deterministic session/corpus provenance, initial pilot, opt-in expensive matrices, coverage gate, adversarial acceptance gate, final archive hash/summary, and “not executed” result sections.
+
+### Phase 09 — Evidence, reports, and docs
+
+Acceptance: archive/evidence index with hashes and supported claims; exact current results and coverage failure analysis; architecture/methodology/schema/limitations/reproducibility/Kaggle/safety docs updated; central/benign/adversarial plans and research report template; prominent README negative result; no unsupported application answer.
+
+### Phase 10 — GitHub-ready delivery without push
+
+Acceptance: all available CPU, lint, format, build, import, CLI, notebook, secret/path, diff, and size checks recorded; status explained; no archives/caches/secrets/output notebooks staged; completion report, change summary, PR body, release notes/checklist, exact Kaggle/user commands, and push command prepared; no automatic push.
+
+## Progress log
+
+- [x] `2026-08-02T12:50:25+05:00` Read the completion package in the required order: master prompt, package `AGENTS.md`, plan rules, seven context files, acceptance YAML, experiment CSV, and phases 00–10.
+- [x] `2026-08-02T12:50:25+05:00` Confirmed live path/Git root, branch, HEAD, remotes, history, status, diff, and untracked paths.
+- [x] `2026-08-02T12:50:25+05:00` Audited repository configuration, docs, source, tests, notebook sources/metadata, archive member names/hashes, and extracted evidence manifests/summaries without modifying evidence.
+- [x] `2026-08-02T12:50:25+05:00` Ran CPU test/lint/format/build baseline; exact outcomes are recorded in the state inventory.
+- [x] `2026-08-02T12:50:25+05:00` Created the timestamped state inventory and this living ExecPlan.
+- [x] `2026-08-02T12:54:00+05:00` Created and switched to `codex/commguard-research-completion`; the pre-existing notebook/archive worktree state was preserved.
+- [x] `2026-08-02T13:05:00+05:00` Phase 01 restored the three missing tracked canonical sources, retained the byte-identical shorter research-notebook rename, added root instructions and notebook policy/inventory, ignored local executed evidence/archives without deleting them, repaired CI/metadata/tests, and formatted tracked Python.
+- [x] `2026-08-02T13:18:00+05:00` Phase 01 acceptance: repository tests 5 passed; CPU-safe suite 57 passed/5 deselected; Ruff check and format passed; canonical notebooks are unexecuted; executed hashes remained unchanged; wheel/sdist, import, CLI, and `git diff --check` passed.
+- [ ] Execute Phase 02 and its acceptance checks.
+- [ ] Execute Phase 03 and its acceptance checks.
+- [ ] Execute Phase 04 and its acceptance checks.
+- [ ] Execute Phase 05 and its acceptance checks.
+- [ ] Execute Phase 06 and its acceptance checks.
+- [ ] Execute Phase 07 and its acceptance checks.
+- [ ] Execute Phase 08 and its acceptance checks.
+- [ ] Execute Phase 09 and its acceptance checks.
+- [ ] Execute Phase 10 and stop before push unless explicitly approved.
+
+## Decision log
+
+- `2026-08-02`: Treat the hyphen-named executed notebooks as immutable local evidence, not canonical source. Their hashes and outputs must be preserved; new canonical notebooks will use underscore names and contain no outputs.
+- `2026-08-02`: Treat `environment_fingerprint` as an environment description only. Existing per-run values will be loaded as legacy ambiguous grouping, never silently upgraded into true session IDs.
+- `2026-08-02`: Preserve old artifacts byte-for-byte. New schemas/loaders may adapt them in memory and new derived artifacts may reference their hashes.
+- `2026-08-02`: Keep required core dependencies empty. Analysis, telemetry, and optional online serving stay in extras or use the standard library where practical.
+- `2026-08-02`: Use version `0.2.0` only if the implementation/schema/API milestones are completed and documented; otherwise use an explicit prerelease. Final decision is deferred until Phase 09.
+- `2026-08-02`: Do not install missing build tooling without explicit approval. First check whether a truthful equivalent build validation is available; otherwise record/request the dependency at the gate.
+
+## Discoveries
+
+- The package audit is still accurate on notebook worktree state and the one failing CPU test.
+- The ignored 253 KiB `.txt` file is a captured recursive repository listing, including `.git` filenames; it is not current project-source prose or result evidence.
+- The current root has no `AGENTS.md`; only the completion package does.
+- The executed benign notebook's extraction checks traversal but does not reject links; the executed detector notebook does reject links but deletes a working restore directory. Both are evidence copies and will not be rewritten. Canonical replacements must use safer no-overwrite extraction.
+- The tracked CI runs `ruff check src tests`, while the package requires `ruff check .` and formatting. Canonical notebook policy and Ruff exclusions/formatting must reconcile those gates explicitly.
+- The 18 benign workloads completed, but several wall durations were only six to seven seconds; completion is not coverage.
+- Every merged manifest has a distinct environment fingerprint. The feature artifact therefore reports eight apparent “sessions” for eight runs, reproducing the invalid grouping defect.
+- Calibration-stage idle runs entered the 16-row feature artifact. Primary corpus selection must come from a declared corpus manifest, not designation alone.
+
+## Schema migrations
+
+Baseline schema `1.0` has `run_id`, `environment_fingerprint`, and legacy `session_fingerprint` feature metadata, but no explicit true session/corpus/node semantics and no coverage artifact.
+
+Planned schema migration:
+
+| Artifact | Before | After | Compatibility |
+|---|---|---|---|
+| Environment | `session_fingerprint` conflates grouping/environment | `experiment_session_id`, `node_id`, `environment_fingerprint`, source dirty state | legacy loader retains old field and marks grouping ambiguous |
+| Run manifest | run/environment IDs only | session, corpus/collection, run, node, config/family IDs, measured interval, source/notebook/input provenance | additive loader/migration; raw files unchanged |
+| Corpus | absent/ad hoc summary | planned run entries plus accepted run allow-list and required families/counts | legacy directory import requires explicit selection or diagnostic mode |
+| Features | rows only, legacy session fingerprint | versioned extraction result plus aligned feature rows and coverage records | old feature-row loader remains supported with ambiguity flag |
+| Evaluation | strategy prose may disagree with override | actual strategy, groups, selection protocol, counts/warnings and communication-only primary block | old result remains readable, never relabeled |
+
+Exact version identifiers and field mappings will be updated in this section during Phases 02–04.
+
+## Validation matrix
+
+| Area | Check | Status |
+|---|---|---|
+| CPU | package import | baseline passed in tests |
+| CPU | CPU-safe pytest | baseline 56 passed / 1 notebook-path failure / 5 deselected |
+| CPU | Ruff lint `src tests` | baseline passed |
+| CPU | Ruff lint/format root | baseline failed; pending repair |
+| CPU | build wheel/sdist | pending; `build` module unavailable |
+| CPU | notebook JSON/output/source policy | pending repair |
+| CPU | schema/coverage/split/central/workload tests | pending implementation |
+| GPU | local CUDA/NCCL/NVML | not suitable on this host; pending compatible hardware |
+| Kaggle | historical dual-T4 evidence | measured old pilot only; no new execution in this plan yet |
+| Kaggle | v2 notebooks and full benign coverage | pending user execution after immutable commit/push |
+| Multi-node | two-agent CPU simulation | pending implementation |
+| Multi-node | physical online deployment/interconnect | pending hardware validation; no claim permitted |
+
+## Recovery and idempotence
+
+- Never use Git reset, clean, force checkout, history rewrite, or force push.
+- Before each phase, record `git status --short --branch` and inspect overlapping user changes.
+- All generated evidence writes remain create-only. Schema migrations operate on loaded copies or create new derived artifacts; raw archives stay immutable.
+- Tests use fresh pytest temporary directories. Local state snapshots are timestamped and do not overwrite earlier records.
+- Canonical notebook generation must be deterministic and clear execution counts/outputs; executed originals remain local-only by hash.
+- If interrupted, resume from the first unchecked progress item, re-read the latest decisions/discoveries, and rerun the most recent targeted checks. Phase commits, when created, are additive recovery points.
+
+## Artifacts
+
+- `.agent/state/20260802T125025+0500/baseline.md` — authoritative pre-change inventory, SHA-256 `38a8c7857c4475e90936620dd7a579c126c7043638c9f9ea12bda7c219309aab`.
+- `.agent/execplans/commguard-research-completion.md` — this living plan (hash changes as the plan evolves).
+- Existing evidence archive hashes are recorded in the baseline; raw archives are intentionally not copied or modified.
+
+## Final retrospective
+
+Pending. At completion this section will distinguish completed CPU-safe engineering, historical measured evidence preserved, hardware-dependent checks not executed, unresolved risks, and the single highest-value next experiment.

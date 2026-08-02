@@ -26,8 +26,6 @@ def test_constant_signal_falsifies_calibration() -> None:
 
 
 def test_unsupported_signal_falsifies_calibration() -> None:
-    result = analyze_calibration(
-        [row(1, None, False), row(4, None, False), row(16, None, False)]
-    )
+    result = analyze_calibration([row(1, None, False), row(4, None, False), row(16, None, False)])
     assert result["status"] == "not_supported"
     assert "unsupported" in " ".join(result["falsification_reasons"]).lower()

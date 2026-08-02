@@ -22,14 +22,35 @@ def test_kaggle_snapshot_is_verbatim() -> None:
     assert len((ROOT / "pip-kaggle-list.txt").read_text().splitlines()) == 935
 
 
-def test_notebook_is_valid_json_and_has_no_sdk_implementation() -> None:
-    notebook = json.loads((ROOT / "notebooks/commguard_dual_t4.ipynb").read_text())
-    assert notebook["nbformat"] == 4
-    source = "\n".join(
-        "".join(cell["source"]) for cell in notebook["cells"] if cell["cell_type"] == "code"
+def test_canonical_notebook_inventory_is_valid_and_unexecuted() -> None:
+    notebook_root = ROOT / "notebooks"
+    inventory = json.loads((notebook_root / "canonical_notebooks.json").read_text(encoding="utf-8"))
+    names = inventory["canonical_notebooks"]
+    assert inventory["schema_version"] == 1
+    assert len(names) == len(set(names))
+    assert all("-" not in name and name.endswith(".ipynb") for name in names)
+    assert (ROOT / "docs/notebook-policy.md").is_file()
+
+    for name in names:
+        notebook = json.loads((notebook_root / name).read_text(encoding="utf-8"))
+        assert notebook["nbformat"] == 4
+        assert notebook["cells"]
+        code_cells = [cell for cell in notebook["cells"] if cell["cell_type"] == "code"]
+        assert all(cell.get("execution_count") is None for cell in code_cells)
+        assert all(not cell.get("outputs") for cell in code_cells)
+        source = "\n".join(
+            cell["source"] if isinstance(cell["source"], str) else "".join(cell["source"])
+            for cell in code_cells
+        )
+        assert "class TelemetryCollector" not in source
+        assert "class ArtifactStore" not in source
+        assert "drive.google.com/file/d/" not in source
+
+    quickstart = json.loads((notebook_root / "commguard_dual_t4.ipynb").read_text())
+    quickstart_source = "\n".join(
+        "".join(cell["source"]) for cell in quickstart["cells"] if cell["cell_type"] == "code"
     )
-    assert "pip', 'install', '--no-build-isolation', '--no-deps'" in source
-    assert "class TelemetryCollector" not in source
+    assert "pip', 'install', '--no-build-isolation', '--no-deps'" in quickstart_source
 
 
 def test_core_install_has_no_forced_dependencies() -> None:

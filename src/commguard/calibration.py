@@ -32,12 +32,9 @@ def _correlation(left: list[float], right: list[float]) -> float | None:
         return None
     left_mean = statistics.fmean(left)
     right_mean = statistics.fmean(right)
-    numerator = sum(
-        (x - left_mean) * (y - right_mean) for x, y in zip(left, right, strict=False)
-    )
+    numerator = sum((x - left_mean) * (y - right_mean) for x, y in zip(left, right, strict=False))
     denominator = math.sqrt(
-        sum((x - left_mean) ** 2 for x in left)
-        * sum((y - right_mean) ** 2 for y in right)
+        sum((x - left_mean) ** 2 for x in left) * sum((y - right_mean) ** 2 for y in right)
     )
     return numerator / denominator if denominator else None
 
@@ -127,8 +124,7 @@ def analyze_calibration(
         signal
         for row in idle_rows
         if row.get("pcie_supported")
-        and (signal := _nonnegative_number(row.get("pcie_total_mean_bytes_per_s")))
-        is not None
+        and (signal := _nonnegative_number(row.get("pcie_total_mean_bytes_per_s"))) is not None
     ]
     idle_median = statistics.median(idle_signals) if idle_signals else None
     capture_gate_applied = idle_median is not None
@@ -194,9 +190,7 @@ def analyze_calibration(
                 "usable_repetitions": len(values),
                 "median_bytes_per_s": median,
                 "mean_bytes_per_s": mean,
-                "mad_bytes_per_s": (
-                    _median_absolute_deviation(values) if values else None
-                ),
+                "mad_bytes_per_s": (_median_absolute_deviation(values) if values else None),
                 "coefficient_of_variation": coefficient_of_variation,
                 "capture_success_count": capture_success_count,
                 "capture_rate": capture_rate,
@@ -205,14 +199,10 @@ def analyze_calibration(
         )
 
     usable_summaries = [
-        summary
-        for summary in payload_summaries
-        if summary["median_bytes_per_s"] is not None
+        summary for summary in payload_summaries if summary["median_bytes_per_s"] is not None
     ]
     payloads = [float(summary["payload_mib"]) for summary in usable_summaries]
-    median_signals = [
-        float(summary["median_bytes_per_s"]) for summary in usable_summaries
-    ]
+    median_signals = [float(summary["median_bytes_per_s"]) for summary in usable_summaries]
     rank_correlation = (
         _correlation(_ranks(payloads), _ranks(median_signals))
         if len(usable_summaries) >= 2
@@ -220,9 +210,7 @@ def analyze_calibration(
     )
     positive_signals = [value for value in median_signals if value > 0]
     dynamic_range = (
-        max(positive_signals) / min(positive_signals)
-        if len(positive_signals) >= 2
-        else None
+        max(positive_signals) / min(positive_signals) if len(positive_signals) >= 2 else None
     )
 
     reliable_payloads = [
@@ -242,13 +230,10 @@ def analyze_calibration(
     if not rows:
         reasons.append("no calibration observations were provided")
     if invalid_payload_count:
-        reasons.append(
-            f"{invalid_payload_count} non-idle observations had an invalid payload size"
-        )
+        reasons.append(f"{invalid_payload_count} non-idle observations had an invalid payload size")
     if unsupported_count:
         reasons.append(
-            "PCIe TX/RX was unsupported in "
-            f"{unsupported_count} calibration observations"
+            f"PCIe TX/RX was unsupported in {unsupported_count} calibration observations"
         )
     if idle_rows and not idle_signals:
         reasons.append("idle baseline rows were present but none had a usable PCIe reading")
@@ -257,34 +242,22 @@ def analyze_calibration(
             f"{invalid_idle_count} idle baseline observations had no usable PCIe reading"
         )
     if invalid_participation_count:
-        reasons.append(
-            f"{invalid_participation_count} observations had invalid rank participation"
-        )
+        reasons.append(f"{invalid_participation_count} observations had invalid rank participation")
     if invalid_signal_count:
-        reasons.append(
-            f"{invalid_signal_count} supported observations had no usable PCIe reading"
-        )
+        reasons.append(f"{invalid_signal_count} supported observations had no usable PCIe reading")
     if len(usable_summaries) < minimum_sizes:
         reasons.append(
             f"only {len(usable_summaries)} usable payload sizes; "
             f"at least {minimum_sizes} are required"
         )
     if rank_correlation is None or rank_correlation < minimum_rank_correlation:
-        reasons.append(
-            f"rank correlation {rank_correlation!r} is below "
-            f"{minimum_rank_correlation}"
-        )
+        reasons.append(f"rank correlation {rank_correlation!r} is below {minimum_rank_correlation}")
     if dynamic_range is None or dynamic_range < minimum_dynamic_range:
-        reasons.append(
-            f"dynamic range {dynamic_range!r} is below {minimum_dynamic_range}"
-        )
+        reasons.append(f"dynamic range {dynamic_range!r} is below {minimum_dynamic_range}")
     if not reliable_payloads:
         reasons.append("no payload group passed the repetition-aware capture gate")
     if unreliable_payloads:
-        reasons.append(
-            "repetition-aware capture gate failed for payloads: "
-            f"{unreliable_payloads}"
-        )
+        reasons.append(f"repetition-aware capture gate failed for payloads: {unreliable_payloads}")
 
     aggregate_gate_failed = (
         len(usable_summaries) < minimum_sizes
