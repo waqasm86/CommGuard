@@ -6,25 +6,41 @@ import json
 import os
 import random
 import statistics
-import uuid
+import time
+from collections import Counter
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from commguard.adversarial import AdversarialHoldoutPlan, strategy_for_config
 from commguard.artifacts import ArtifactStore
-from commguard.calibration import analyze_calibration
+from commguard.calibration import (
+    STANDARD_CALIBRATION_PAYLOAD_MIB,
+    STANDARD_CALIBRATION_REPETITIONS,
+    analyze_calibration,
+    build_calibration_reference,
+    verify_calibration_reference,
+)
+from commguard.corpus import CorpusManifest, PlannedRun
 from commguard.distributed.launcher import LaunchResult, launch_torchrun
 from commguard.environment.preflight import check_environment
-from commguard.exceptions import CalibrationError, WorkloadError
-from commguard.provenance import source_identifier
-from commguard.schemas import SCHEMA_VERSION, TELEMETRY_FIELDS, RunManifest
+from commguard.exceptions import (
+    ApprovalRequiredError,
+    CalibrationError,
+    CoverageError,
+    WorkloadError,
+)
+from commguard.features import (
+    PRIMARY_BENIGN_FAMILIES,
+    PRIMARY_WINDOW_SECONDS,
+    extract_feature_result,
+    require_primary_coverage,
+)
+from commguard.provenance import ProvenanceContext, new_corpus_id, new_run_id
+from commguard.schemas import CURRENT_SCHEMA_VERSION, SCHEMA_VERSION, TELEMETRY_FIELDS, RunManifest
 from commguard.telemetry import TelemetryCollector
-from commguard.workloads import get_workload, profile_workloads
-
-
-def _new_run_id(name: str) -> str:
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-    return f"{stamp}-{name}-{uuid.uuid4().hex[:8]}"
+from commguard.workloads import adversarial_profile_workloads, get_workload, profile_workloads
 
 
 def _nccl_environment() -> dict[str, str]:
@@ -68,11 +84,7 @@ def _pcie_observation(samples: list[Any], run_directory: Path) -> dict[str, Any]
                 timestamp = int(event["monotonic_ns"])
                 phase_end = timestamp if phase_end is None else max(phase_end, timestamp)
     measured_samples = (
-        [
-            sample
-            for sample in samples
-            if phase_start <= sample.monotonic_ns <= phase_end
-        ]
+        [sample for sample in samples if phase_start <= sample.monotonic_ns <= phase_end]
         if phase_start is not None and phase_end is not None
         else samples
     )
@@ -102,20 +114,45 @@ def _write_run_evidence(
     collector: TelemetryCollector,
     diagnostics: dict[str, Any],
     preflight: dict[str, Any],
+    provenance: ProvenanceContext,
     started: str,
     ended: str,
 ) -> dict[str, Any]:
     run_prefix = Path("runs") / run_id
     rank_runtime_evidence: dict[str, dict[str, Any]] = {}
+    measurement_intervals: list[dict[str, Any]] = []
     for rank in (0, 1):
         event_path = store.resolve(run_prefix / f"rank-{rank}.events.jsonl")
         evidence: dict[str, Any] = {}
         if event_path.exists():
             for line in event_path.read_text(encoding="utf-8").splitlines():
                 event = json.loads(line)
-                if event.get("event") in {"startup", "model_ready", "memory_peak"}:
+                if event.get("event") in {
+                    "startup",
+                    "model_ready",
+                    "memory_peak",
+                    "measurement_interval",
+                    "strategy_summary",
+                }:
                     evidence[str(event["event"])] = event.get("details", {})
+                if event.get("event") == "measurement_interval":
+                    measurement_intervals.append(dict(event.get("details", {})))
         rank_runtime_evidence[str(rank)] = evidence
+    measurement_start_ns = (
+        max(int(item["measurement_start_monotonic_ns"]) for item in measurement_intervals)
+        if len(measurement_intervals) == 2
+        else None
+    )
+    measurement_end_ns = (
+        min(int(item["measurement_end_monotonic_ns"]) for item in measurement_intervals)
+        if len(measurement_intervals) == 2
+        else None
+    )
+    measured_duration_seconds = (
+        max(0.0, (measurement_end_ns - measurement_start_ns) / 1e9)
+        if measurement_start_ns is not None and measurement_end_ns is not None
+        else None
+    )
     manifested_config = {**config, "rank_runtime_evidence": rank_runtime_evidence}
     if collector.samples:
         store.write_jsonl(
@@ -185,8 +222,8 @@ def _write_run_evidence(
             "packages": preflight["packages"],
             "telemetry_capabilities": preflight["telemetry_capabilities"],
         },
-        environment_fingerprint=str(preflight["session_fingerprint"]),
-        source_commit=source_identifier(),
+        environment_fingerprint=str(preflight["environment_fingerprint"]),
+        source_commit=provenance.source_commit,
         started_at_utc=started,
         ended_at_utc=ended,
         warmup_seconds=float(config.get("warmup_seconds", 2.0)),
@@ -196,6 +233,18 @@ def _write_run_evidence(
         rank_exit_codes=result.rank_exit_codes,
         nccl_environment=_nccl_environment(),
         participation_valid=result.participation_valid,
+        experiment_session_id=provenance.experiment_session_id,
+        collection_id=provenance.collection_id,
+        corpus_id=provenance.corpus_id,
+        node_id=provenance.node_id,
+        source_dirty=provenance.source_dirty,
+        input_archive_sha256=provenance.input_archive_sha256,
+        notebook_version=provenance.notebook_version,
+        random_seed=int(config["seed"]),
+        measurement_start_monotonic_ns=measurement_start_ns,
+        measurement_end_monotonic_ns=measurement_end_ns,
+        measured_duration_seconds=measured_duration_seconds,
+        schema_version=CURRENT_SCHEMA_VERSION,
     )
     store.write_json(run_prefix / "manifest.json", manifest.to_dict())
     return {
@@ -214,15 +263,40 @@ def run_experiment(
     timeout_s: float = 180.0,
     strict_preflight: bool = True,
     raise_on_failure: bool = True,
+    provenance: ProvenanceContext | None = None,
+    adversarial_approval: bool = False,
 ) -> dict[str, Any]:
     """Run one isolated two-rank experiment and preserve success or failure evidence."""
-    store = ArtifactStore(output)
-    store.initialize()
-    preflight = check_environment(strict=strict_preflight)
     config = get_workload(workload)
     if overrides:
+        identity_fields = {
+            "config_id",
+            "strategy_id",
+            "mode",
+            "label",
+            "family",
+            "designation",
+            "enabled_by_default",
+            "requires_human_approval",
+        }
+        changed_identity = sorted(
+            key for key in identity_fields & set(overrides) if overrides[key] != config.get(key)
+        )
+        if changed_identity:
+            raise ValueError(f"workload identity fields cannot be overridden: {changed_identity}")
         config.update(overrides)
-    run_id = _new_run_id(workload)
+    if config["designation"] == "adversarial" and not adversarial_approval:
+        raise ApprovalRequiredError(
+            f"workload={workload} family={config['family']} is a bounded defensive red-team "
+            "strategy; pass explicit adversarial approval only after reviewing its plan"
+        )
+    if config["designation"] == "adversarial":
+        strategy_for_config(config)
+    store = ArtifactStore(output)
+    store.initialize()
+    context = provenance or ProvenanceContext.create(corpus_id=new_corpus_id(workload))
+    preflight = check_environment(strict=strict_preflight, provenance=context)
+    run_id = new_run_id(workload, context.experiment_session_id)
     config.update(
         {
             "run_id": run_id,
@@ -231,6 +305,7 @@ def run_experiment(
             "process_group_timeout_s": min(float(timeout_s) * 0.8, 120.0),
             "warmup_seconds": float(config.get("warmup_seconds", 2.0)),
             "deterministic": bool(config.get("deterministic", False)),
+            **context.run_fields(random_seed=int(config.get("seed", 1337))),
         }
     )
     run_directory = store.resolve(Path("runs") / run_id)
@@ -263,6 +338,7 @@ def run_experiment(
         collector,
         collector_diagnostics,
         preflight,
+        context,
         started,
         ended,
     )
@@ -278,13 +354,53 @@ def run_experiment(
 
 def run_calibration_sweep(
     output: str | Path = "artifacts",
-    payload_mib: tuple[int, ...] = (1, 4, 16, 64),
+    payload_mib: tuple[int, ...] = STANDARD_CALIBRATION_PAYLOAD_MIB,
     collective: str = "all_reduce",
-    repetitions: int = 1,
+    repetitions: int = STANDARD_CALIBRATION_REPETITIONS,
     timeout_s: float = 180.0,
+    provenance: ProvenanceContext | None = None,
 ) -> dict[str, Any]:
+    if repetitions < 1:
+        raise ValueError("calibration repetitions must be at least one")
+    if not payload_mib or any(payload <= 0 for payload in payload_mib):
+        raise ValueError("calibration payloads must be positive")
+    if len(payload_mib) != len(set(payload_mib)):
+        raise ValueError("calibration payloads must be unique")
+    context = provenance or ProvenanceContext.create(corpus_id=new_corpus_id("calibration"))
     observations: list[dict[str, Any]] = []
+
+    def observe(outcome: dict[str, Any], **identity: Any) -> dict[str, Any]:
+        return {
+            "run_id": outcome["run_id"],
+            **identity,
+            "participation_valid": outcome["manifest"]["participation_valid"],
+            "exit_status": outcome["manifest"]["exit_status"],
+            "pcie_supported": outcome["pcie_supported"],
+            "pcie_total_mean_bytes_per_s": outcome["pcie_total_mean_bytes_per_s"],
+            "pcie_total_median_bytes_per_s": outcome["pcie_total_median_bytes_per_s"],
+            "pcie_sample_count": outcome["pcie_sample_count"],
+        }
+
     for repetition in range(repetitions):
+        idle_outcome = run_experiment(
+            "calibration_idle",
+            output=output,
+            overrides={"repetition": repetition},
+            timeout_s=timeout_s,
+            strict_preflight=True,
+            raise_on_failure=False,
+            provenance=context,
+        )
+        observations.append(
+            observe(
+                idle_outcome,
+                observation_type="idle_baseline",
+                is_idle=True,
+                payload_mib=0,
+                collective=None,
+                repetition=repetition,
+            )
+        )
         for payload in payload_mib:
             outcome = run_experiment(
                 "collective_all_reduce_1mib",
@@ -297,45 +413,446 @@ def run_calibration_sweep(
                 timeout_s=timeout_s,
                 strict_preflight=True,
                 raise_on_failure=False,
+                provenance=context,
             )
             observations.append(
-                {
-                    "run_id": outcome["run_id"],
-                    "payload_mib": payload,
-                    "collective": collective,
-                    "repetition": repetition,
-                    "participation_valid": outcome["manifest"]["participation_valid"],
-                    "exit_status": outcome["manifest"]["exit_status"],
-                    "pcie_supported": outcome["pcie_supported"],
-                    "pcie_total_mean_bytes_per_s": outcome[
-                        "pcie_total_mean_bytes_per_s"
-                    ],
-                    "pcie_total_median_bytes_per_s": outcome[
-                        "pcie_total_median_bytes_per_s"
-                    ],
-                    "pcie_sample_count": outcome["pcie_sample_count"],
-                }
+                observe(
+                    outcome,
+                    observation_type="collective",
+                    is_idle=False,
+                    payload_mib=payload,
+                    collective=collective,
+                    repetition=repetition,
+                )
             )
-    result = analyze_calibration(observations)
-    result["session_fingerprint"] = check_environment(strict=True)["session_fingerprint"]
+    result = analyze_calibration(
+        observations,
+        minimum_sizes=len(payload_mib),
+        minimum_repetitions=STANDARD_CALIBRATION_REPETITIONS,
+    )
+    environment = check_environment(strict=True, provenance=context)
+    result.update(
+        {
+            "experiment_session_id": context.experiment_session_id,
+            "collection_id": context.collection_id,
+            "corpus_id": context.corpus_id,
+            "node_id": context.node_id,
+            "environment_fingerprint": environment["environment_fingerprint"],
+            "session_fingerprint": environment["environment_fingerprint"],
+            "source_commit": context.source_commit,
+            "source_dirty": context.source_dirty,
+        }
+    )
     store = ArtifactStore(output)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     path = store.write_json(f"results/calibration-{timestamp}.json", result)
     result["path"] = str(path)
+    result["reference"] = build_calibration_reference(
+        store.root,
+        path,
+        current_experiment_session_id=context.experiment_session_id,
+    )
     return result
 
 
+def run_segmented_series(
+    output: str | Path = "artifacts",
+    *,
+    adversarial_approval: bool = False,
+    calibration_reference: dict[str, Any] | None = None,
+    timeout_s: float = 180.0,
+) -> dict[str, Any]:
+    """Run separately launched short DDP segments after an explicit human gate."""
+    workload = "adversarial_segmented_runs"
+    config = get_workload(workload)
+    if not adversarial_approval:
+        raise ApprovalRequiredError(
+            "segmented_runs is a bounded defensive red-team series; explicit approval is required"
+        )
+    root = Path(output)
+    if calibration_reference is None:
+        raise CalibrationError(
+            "segmented adversarial series requires an exact calibration reference"
+        )
+    verify_calibration_reference(
+        root,
+        calibration_reference,
+        require_current_session=False,
+    )
+    context = ProvenanceContext.create(corpus_id=new_corpus_id("segmented-runs"))
+    segment_count = int(config["segment_count"])
+    segment_seconds = float(config["segment_seconds"])
+    restart_gap_seconds = float(config["restart_gap_seconds"])
+    segment_group_id = f"segments-{context.experiment_session_id}"
+    plans = tuple(
+        PlannedRun(
+            plan_id=f"segmented-{index:03d}",
+            workload_family=str(config["family"]),
+            target_label=str(config["label"]),
+            config={
+                **config,
+                "workload_name": workload,
+                "segment_index": index,
+                "segment_group_id": segment_group_id,
+            },
+            designation="adversarial",
+            random_seed=int(config.get("seed", 1337)),
+            workload_config_id=str(config["config_id"]),
+        )
+        for index in range(segment_count)
+    )
+    store = ArtifactStore(output)
+    store.initialize()
+    plan_manifest = _corpus_manifest(context, plans)
+    plan_path = store.write_json(
+        f"corpora/{context.corpus_id}-plan.json",
+        plan_manifest.to_dict(),
+    )
+    outcomes: list[dict[str, Any]] = []
+    finalized: list[PlannedRun] = []
+    for index, plan in enumerate(plans):
+        outcome = run_experiment(
+            workload,
+            output=output,
+            overrides={
+                "segment_index": index,
+                "segment_group_id": segment_group_id,
+                "warmup_seconds": float(config["warmup_seconds"]),
+                "min_measured_seconds": segment_seconds,
+            },
+            timeout_s=timeout_s,
+            strict_preflight=True,
+            raise_on_failure=False,
+            provenance=context,
+            adversarial_approval=True,
+        )
+        outcomes.append(outcome)
+        accepted = (
+            str(outcome["run_id"]) if outcome["manifest"]["exit_status"] == "completed" else None
+        )
+        finalized.append(replace(plan, accepted_run_id=accepted))
+        if index + 1 < segment_count:
+            time.sleep(restart_gap_seconds)
+    final_manifest = _corpus_manifest(context, tuple(finalized))
+    final_path = store.write_json(
+        f"corpora/{context.corpus_id}-final.json",
+        final_manifest.to_dict(),
+    )
+    extraction = extract_feature_result(
+        output,
+        final_manifest,
+        output=output,
+        selected_designation="adversarial",
+    )
+    family_summary = _family_summary(tuple(finalized), extraction.coverage)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    summary = {
+        "artifact_kind": "experiment_summary",
+        "schema_version": SCHEMA_VERSION,
+        "summary_type": "segmented_adversarial_series",
+        "strategy_id": "segmented_runs",
+        "segment_group_id": segment_group_id,
+        "segment_count": segment_count,
+        "segment_seconds": segment_seconds,
+        "restart_gap_seconds": restart_gap_seconds,
+        "planned_corpus_manifest": str(plan_path.relative_to(store.root)),
+        "final_corpus_manifest": str(final_path.relative_to(store.root)),
+        "run_ids": [outcome["run_id"] for outcome in outcomes],
+        "completed": sum(plan.accepted_run_id is not None for plan in finalized),
+        "failed": sum(plan.accepted_run_id is None for plan in finalized),
+        "family_counts": family_summary,
+        "feature_extraction": extraction.summary(),
+        "primary_feature_coverage_expected": False,
+        "coverage_note": (
+            "Segments are intentionally shorter than the 30-second primary window and must not "
+            "be concatenated across restart gaps."
+        ),
+        "detector_metrics_computed": False,
+    }
+    store.write_json(f"results/segmented-series-{timestamp}.json", summary)
+    return summary
+
+
+def run_adversarial_matrix(
+    output: str | Path = "artifacts",
+    *,
+    holdout_plan: AdversarialHoldoutPlan,
+    adversarial_approval: bool = False,
+    release_final_adversarial_holdout: bool = False,
+    final_holdout_approval: bool = False,
+    repetitions: int = 1,
+    timeout_s: float = 180.0,
+    provenance: ProvenanceContext | None = None,
+) -> dict[str, Any]:
+    """Collect a bounded adversarial corpus only after benign acceptance and approval."""
+    if not adversarial_approval:
+        raise ApprovalRequiredError(
+            "the bounded adversarial matrix requires explicit approval before artifact creation"
+        )
+    if release_final_adversarial_holdout and not final_holdout_approval:
+        raise ApprovalRequiredError(
+            "releasing the sealed final adversarial holdout requires separate explicit approval"
+        )
+    if repetitions < 1:
+        raise ValueError("adversarial repetitions must be at least one")
+    holdout_plan.validate()
+    root = Path(output)
+    evaluation_paths = sorted((root / "results").glob("evaluation-*.json"))
+    if not evaluation_paths:
+        raise CoverageError("adversarial collection requires a saved benign acceptance evaluation")
+    benign_acceptance = json.loads(evaluation_paths[-1].read_text(encoding="utf-8"))
+    if not benign_acceptance.get("coverage_gate", {}).get("passed"):
+        raise CoverageError("saved benign evaluation does not contain a passing coverage gate")
+    if not benign_acceptance.get("primary_communication_only"):
+        raise CoverageError("saved benign evaluation has no primary communication-only result")
+
+    context = provenance or ProvenanceContext.create(corpus_id=new_corpus_id("adversarial-matrix"))
+    segment_group_id = f"segments-{context.experiment_session_id}"
+    plans: list[PlannedRun] = []
+    for workload in adversarial_profile_workloads():
+        config = get_workload(workload)
+        round_name = holdout_plan.round_for(
+            family=str(config["family"]),
+            session_id=context.experiment_session_id,
+            config_id=str(config["config_id"]),
+            release_final=release_final_adversarial_holdout,
+        )
+        slot_count = (
+            int(config["segment_count"])
+            if config["strategy_id"] == "segmented_runs" and round_name != "sealed_final_holdout"
+            else 1
+        )
+        for repetition in range(repetitions):
+            for slot in range(slot_count):
+                planned_config = {
+                    **config,
+                    "workload_name": workload,
+                    "adversarial_round": round_name,
+                    "repetition": repetition,
+                }
+                if config["strategy_id"] == "segmented_runs":
+                    planned_config.update(
+                        {
+                            "segment_index": slot,
+                            "segment_group_id": segment_group_id,
+                        }
+                    )
+                plans.append(
+                    PlannedRun(
+                        plan_id=(
+                            f"adversarial-{config['strategy_id']}-r{repetition:03d}-s{slot:03d}"
+                        ),
+                        workload_family=str(config["family"]),
+                        target_label=str(config["label"]),
+                        config=planned_config,
+                        designation="adversarial",
+                        random_seed=int(config.get("seed", 1337)),
+                        workload_config_id=str(config["config_id"]),
+                    )
+                )
+    store = ArtifactStore(output)
+    store.initialize()
+    plan_manifest = _corpus_manifest(context, tuple(plans))
+    plan_path = store.write_json(
+        f"corpora/{context.corpus_id}-plan.json",
+        plan_manifest.to_dict(),
+    )
+    outcomes: list[dict[str, Any]] = []
+    finalized: list[PlannedRun] = []
+    for index, plan in enumerate(plans):
+        if plan.config["adversarial_round"] == "sealed_final_holdout":
+            finalized.append(plan)
+            continue
+        workload = str(plan.config["workload_name"])
+        overrides = {
+            "repetition": int(plan.config["repetition"]),
+            "adversarial_round": str(plan.config["adversarial_round"]),
+        }
+        if plan.config["strategy_id"] == "segmented_runs":
+            overrides.update(
+                {
+                    "segment_index": int(plan.config["segment_index"]),
+                    "segment_group_id": str(plan.config["segment_group_id"]),
+                    "min_measured_seconds": float(plan.config["segment_seconds"]),
+                }
+            )
+        outcome = run_experiment(
+            workload,
+            output=output,
+            overrides=overrides,
+            timeout_s=timeout_s,
+            strict_preflight=True,
+            raise_on_failure=False,
+            provenance=context,
+            adversarial_approval=True,
+        )
+        outcomes.append(outcome)
+        accepted = (
+            str(outcome["run_id"]) if outcome["manifest"]["exit_status"] == "completed" else None
+        )
+        finalized.append(replace(plan, accepted_run_id=accepted))
+        if plan.config["strategy_id"] == "segmented_runs" and index + 1 < len(plans):
+            next_plan = plans[index + 1]
+            if (
+                next_plan.config["strategy_id"] == "segmented_runs"
+                and next_plan.config["repetition"] == plan.config["repetition"]
+            ):
+                time.sleep(float(plan.config["restart_gap_seconds"]))
+    final_manifest = _corpus_manifest(context, tuple(finalized))
+    final_path = store.write_json(
+        f"corpora/{context.corpus_id}-final.json",
+        final_manifest.to_dict(),
+    )
+    prior_extractions = set((store.root / "features").glob("extraction-*.json"))
+    extraction = extract_feature_result(
+        output,
+        final_manifest,
+        output=output,
+        selected_designation="adversarial",
+    )
+    new_extractions = set((store.root / "features").glob("extraction-*.json")) - prior_extractions
+    if len(new_extractions) != 1:
+        raise RuntimeError("adversarial matrix did not create exactly one extraction summary")
+    extraction_path = new_extractions.pop()
+    family_summary = _family_summary(tuple(finalized), extraction.coverage)
+    for family, counts in family_summary.items():
+        sealed = sum(
+            plan.workload_family == family
+            and plan.config["adversarial_round"] == "sealed_final_holdout"
+            for plan in finalized
+        )
+        counts["sealed"] = sealed
+        counts["failed"] -= sealed
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    summary_relative = f"results/adversarial-matrix-{timestamp}.json"
+    summary = {
+        "artifact_kind": "experiment_summary",
+        "schema_version": SCHEMA_VERSION,
+        "summary_type": "adversarial_matrix",
+        "experiment_session_id": context.experiment_session_id,
+        "collection_id": context.collection_id,
+        "corpus_id": context.corpus_id,
+        "source_commit": context.source_commit,
+        "source_dirty": context.source_dirty,
+        "input_archive_sha256": context.input_archive_sha256,
+        "holdout_plan": holdout_plan.to_dict(),
+        "final_holdout_released": release_final_adversarial_holdout,
+        "planned_corpus_manifest": str(plan_path.relative_to(store.root)),
+        "final_corpus_manifest": str(final_path.relative_to(store.root)),
+        "feature_extraction_summary": str(extraction_path.relative_to(store.root)),
+        "planned": len(plans),
+        "executed": len(outcomes),
+        "sealed": sum(
+            plan.config["adversarial_round"] == "sealed_final_holdout" for plan in finalized
+        ),
+        "completed": sum(plan.accepted_run_id is not None for plan in finalized),
+        "failed": sum(
+            plan.accepted_run_id is None
+            and plan.config["adversarial_round"] != "sealed_final_holdout"
+            for plan in finalized
+        ),
+        "run_ids": [outcome["run_id"] for outcome in outcomes],
+        "family_counts": family_summary,
+        "feature_extraction": extraction.summary(),
+        "detector_metrics_computed": False,
+        "summary_artifact": summary_relative,
+    }
+    store.write_json(summary_relative, summary)
+    return summary
+
+
 def estimate_matrix(profile: str, repetitions: int = 1) -> dict[str, Any]:
-    names = profile_workloads(profile)
-    seconds = sum(float(get_workload(name).get("estimated_seconds", 60)) for name in names)
-    seconds *= repetitions
+    plans = plan_matrix(profile, repetitions)
+    seconds = sum(float(plan.config.get("estimated_seconds", 60)) for plan in plans)
     return {
         "profile": profile,
-        "run_count": len(names) * repetitions,
+        "run_count": len(plans),
         "estimated_gpu_minutes": seconds * 2 / 60,
         "estimated_artifact_mib": max(5.0, seconds * 0.02),
         "estimate_only": True,
     }
+
+
+def plan_matrix(profile: str, repetitions: int = 1) -> tuple[PlannedRun, ...]:
+    """Build a deterministic, CPU-only matrix plan with stable configuration IDs."""
+    if repetitions < 1:
+        raise ValueError("matrix repetitions must be at least one")
+    names = [name for name in profile_workloads(profile) if not name.startswith("collective_")]
+    schedule = names * repetitions
+    random.Random(20260730).shuffle(schedule)
+    occurrences: Counter[str] = Counter()
+    plans: list[PlannedRun] = []
+    for index, name in enumerate(schedule):
+        config = get_workload(name)
+        occurrence = occurrences[name]
+        occurrences[name] += 1
+        config["workload_name"] = name
+        plans.append(
+            PlannedRun(
+                plan_id=f"{profile}-{index:04d}-{name}-{occurrence:03d}",
+                workload_family=str(config["family"]),
+                target_label=str(config["label"]),
+                config=config,
+                designation=str(config["designation"]),
+                random_seed=int(config.get("seed", 1337)),
+                workload_config_id=str(config["config_id"]),
+            )
+        )
+    return tuple(plans)
+
+
+def _corpus_manifest(
+    context: ProvenanceContext,
+    planned_runs: tuple[PlannedRun, ...],
+    calibration_reference: dict[str, Any] | None = None,
+) -> CorpusManifest:
+    return CorpusManifest(
+        corpus_id=context.corpus_id,
+        collection_id=context.collection_id,
+        experiment_session_id=context.experiment_session_id,
+        node_id=context.node_id,
+        planned_runs=planned_runs,
+        accepted_run_ids=tuple(
+            plan.accepted_run_id for plan in planned_runs if plan.accepted_run_id is not None
+        ),
+        source_commit=context.source_commit,
+        source_dirty=context.source_dirty,
+        notebook_version=context.notebook_version,
+        input_archive_sha256=context.input_archive_sha256,
+        random_seed=20260730,
+        calibration_reference=calibration_reference,
+    )
+
+
+def _family_summary(
+    plans: tuple[PlannedRun, ...],
+    coverage: tuple[Any, ...],
+) -> dict[str, dict[str, Any]]:
+    by_plan = {record.plan_id: record for record in coverage}
+    result: dict[str, dict[str, Any]] = {}
+    for family in sorted({plan.workload_family for plan in plans}):
+        family_plans = [plan for plan in plans if plan.workload_family == family]
+        family_coverage = [by_plan[plan.plan_id] for plan in family_plans]
+        reasons = Counter(
+            record.reason_code for record in family_coverage if record.reason_code is not None
+        )
+        result[family] = {
+            "planned": len(family_plans),
+            "completed": sum(plan.accepted_run_id is not None for plan in family_plans),
+            "failed": sum(plan.accepted_run_id is None for plan in family_plans),
+            "feature_valid": sum(
+                record.status == "included"
+                and all(
+                    record.emitted_windows.get(f"{window:g}", 0) > 0
+                    for window in PRIMARY_WINDOW_SECONDS
+                )
+                for record in family_coverage
+            ),
+            "feature_excluded": sum(record.status == "excluded" for record in family_coverage),
+            "coverage_reason_counts": dict(sorted(reasons.items())),
+            "workload_config_ids": sorted({plan.resolved_config_id() for plan in family_plans}),
+        }
+    return result
 
 
 def run_matrix(
@@ -344,35 +861,100 @@ def run_matrix(
     repetitions: int | None = None,
     negative_calibration_mode: bool = False,
     timeout_s: float = 180.0,
+    provenance: ProvenanceContext | None = None,
+    prior_calibration_reference: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Run a randomized profile after a session-specific calibration gate."""
+    """Run a planned benign profile after a session-specific calibration gate."""
     if repetitions is None:
         repetitions = 1 if profile == "smoke" else 3
     estimate = estimate_matrix(profile, repetitions)
-    calibration = run_calibration_sweep(output=output, timeout_s=timeout_s)
-    if (
-        calibration["status"] != "supported"
-        and profile != "smoke"
-        and not negative_calibration_mode
-    ):
-        raise CalibrationError(
-            "standard/extended matrix blocked by negative calibration; "
-            f"see {calibration['path']}"
+    context = provenance or ProvenanceContext.create(corpus_id=new_corpus_id(f"{profile}-matrix"))
+    plans = plan_matrix(profile, repetitions)
+    store = ArtifactStore(output)
+    store.initialize()
+    plan_manifest = _corpus_manifest(context, plans)
+    plan_path = store.write_json(
+        f"corpora/{context.corpus_id}-plan.json",
+        plan_manifest.to_dict(),
+    )
+    calibration = run_calibration_sweep(
+        output=output,
+        timeout_s=timeout_s,
+        provenance=context,
+    )
+    calibration_reference = dict(calibration["reference"])
+    verify_calibration_reference(
+        store.root,
+        calibration_reference,
+        expected_experiment_session_ids={context.experiment_session_id},
+        expected_environment_fingerprints={
+            str(calibration_reference["calibration_environment_fingerprint"])
+        },
+        expected_source_commits={context.source_commit},
+    )
+    if prior_calibration_reference is not None:
+        verify_calibration_reference(
+            store.root,
+            prior_calibration_reference,
+            require_current_session=False,
+            require_supported=False,
         )
-    names = profile_workloads(profile)
-    names = [name for name in names if not name.startswith("collective_")]
-    schedule = names * repetitions
-    random.Random(20260730).shuffle(schedule)
-    outcomes = [
-        run_experiment(
+        if prior_calibration_reference["calibration_relationship"] != "prior_session":
+            raise CalibrationError("supplied prior calibration must be labeled prior_session")
+    if calibration["status"] != "supported" and not negative_calibration_mode:
+        raise CalibrationError(
+            f"benign matrix blocked by negative calibration; see {calibration['path']}"
+        )
+    outcomes = []
+    finalized_plans: list[PlannedRun] = []
+    for plan in plans:
+        name = str(plan.config["workload_name"])
+        outcome = run_experiment(
             name,
             output=output,
             timeout_s=timeout_s,
             strict_preflight=True,
             raise_on_failure=False,
+            provenance=context,
         )
-        for name in schedule
-    ]
+        outcomes.append(outcome)
+        accepted_run_id = (
+            str(outcome["run_id"]) if outcome["manifest"]["exit_status"] == "completed" else None
+        )
+        finalized_plans.append(replace(plan, accepted_run_id=accepted_run_id))
+    final_manifest = _corpus_manifest(
+        context,
+        tuple(finalized_plans),
+        calibration_reference=calibration_reference,
+    )
+    final_path = store.write_json(
+        f"corpora/{context.corpus_id}-final.json",
+        final_manifest.to_dict(),
+    )
+    prior_extractions = set((store.root / "features").glob("extraction-*.json"))
+    extraction = extract_feature_result(output, final_manifest, output=output)
+    new_extractions = set((store.root / "features").glob("extraction-*.json")) - prior_extractions
+    if len(new_extractions) != 1:
+        raise RuntimeError("benign matrix did not create exactly one extraction summary")
+    extraction_path = new_extractions.pop()
+    try:
+        coverage_gate = require_primary_coverage(
+            extraction,
+            required_families=PRIMARY_BENIGN_FAMILIES,
+            minimum_runs_per_family=3,
+        )
+    except CoverageError as exc:
+        coverage_gate = {
+            "passed": False,
+            "required_families": list(PRIMARY_BENIGN_FAMILIES),
+            "minimum_runs_per_family": 3,
+            "required_window_seconds": list(PRIMARY_WINDOW_SECONDS),
+            "reason": str(exc),
+        }
+    family_summary = _family_summary(tuple(finalized_plans), extraction.coverage)
+    schedule = [str(plan.config["workload_name"]) for plan in plans]
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    summary_relative = f"results/matrix-{profile}-{timestamp}.json"
     summary = {
         "artifact_kind": "experiment_summary",
         "schema_version": SCHEMA_VERSION,
@@ -380,13 +962,28 @@ def run_matrix(
         "profile": profile,
         "estimate": estimate,
         "calibration_status": calibration["status"],
+        "calibration_reference": calibration_reference,
+        "prior_calibration_reference": prior_calibration_reference,
         "negative_calibration_mode": negative_calibration_mode,
         "schedule": schedule,
+        "planned_corpus_manifest": str(plan_path.relative_to(store.root)),
+        "final_corpus_manifest": str(final_path.relative_to(store.root)),
         "run_ids": [outcome["run_id"] for outcome in outcomes],
+        "experiment_session_id": context.experiment_session_id,
+        "collection_id": context.collection_id,
+        "corpus_id": context.corpus_id,
+        "node_id": context.node_id,
+        "source_commit": context.source_commit,
+        "source_dirty": context.source_dirty,
         "completed": sum(outcome["manifest"]["exit_status"] == "completed" for outcome in outcomes),
         "failed": sum(outcome["manifest"]["exit_status"] != "completed" for outcome in outcomes),
+        "feature_valid": sum(values["feature_valid"] for values in family_summary.values()),
+        "family_counts": family_summary,
+        "feature_extraction": extraction.summary(),
+        "feature_extraction_summary": str(extraction_path.relative_to(store.root)),
+        "primary_coverage_gate": coverage_gate,
+        "detector_metrics_computed": False,
+        "summary_artifact": summary_relative,
     }
-    store = ArtifactStore(output)
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-    store.write_json(f"results/matrix-{profile}-{timestamp}.json", summary)
+    store.write_json(summary_relative, summary)
     return summary

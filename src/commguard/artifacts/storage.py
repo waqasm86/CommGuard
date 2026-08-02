@@ -5,16 +5,96 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import tarfile
 import tempfile
 from collections.abc import Iterable, Mapping
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from commguard.exceptions import ArtifactExistsError, ValidationError
 from commguard.schemas import validate_artifact
 
-LAYOUT = ("environment", "runs", "features", "splits", "results", "figures")
+LAYOUT = ("environment", "corpora", "runs", "features", "splits", "results", "figures")
+
+
+def sha256_file(path: str | Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def restore_archive(
+    archive: str | Path,
+    destination: str | Path,
+    *,
+    expected_sha256: str,
+    maximum_uncompressed_bytes: int = 10 * 1024**3,
+    maximum_members: int = 100_000,
+) -> Path:
+    """Hash-check and safely restore a create-only CommGuard tar.gz archive."""
+    archive_path = Path(archive).resolve()
+    destination_path = Path(destination).resolve()
+    if destination_path.exists():
+        raise ArtifactExistsError(
+            f"refusing to restore into an existing destination: {destination_path}"
+        )
+    if not archive_path.is_file():
+        raise ValidationError(f"archive does not exist: {archive_path}")
+    actual_sha256 = sha256_file(archive_path)
+    if actual_sha256 != expected_sha256:
+        raise ValidationError(
+            f"archive SHA-256 mismatch: expected={expected_sha256} actual={actual_sha256}"
+        )
+    try:
+        with tarfile.open(archive_path, mode="r:gz") as bundle:
+            members = bundle.getmembers()
+            if not members:
+                raise ValidationError("archive contains no members")
+            if len(members) > maximum_members:
+                raise ValidationError(
+                    f"archive member limit exceeded: {len(members)} > {maximum_members}"
+                )
+            total_size = sum(member.size for member in members if member.isfile())
+            if total_size > maximum_uncompressed_bytes:
+                raise ValidationError(
+                    "archive uncompressed-size limit exceeded: "
+                    f"{total_size} > {maximum_uncompressed_bytes}"
+                )
+            seen: set[PurePosixPath] = set()
+            for member in members:
+                relative = PurePosixPath(member.name)
+                if (
+                    not member.name
+                    or relative.is_absolute()
+                    or ".." in relative.parts
+                    or relative in seen
+                ):
+                    raise ValidationError(f"unsafe or duplicate archive path: {member.name!r}")
+                seen.add(relative)
+                if member.issym() or member.islnk():
+                    raise ValidationError(f"archive links are prohibited: {member.name!r}")
+                if not (member.isfile() or member.isdir()):
+                    raise ValidationError(f"unsupported archive member: {member.name!r}")
+            destination_path.mkdir(parents=True, exist_ok=False)
+            for member in members:
+                target = destination_path.joinpath(*PurePosixPath(member.name).parts)
+                if member.isdir():
+                    target.mkdir(parents=True, exist_ok=True)
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                source = bundle.extractfile(member)
+                if source is None:
+                    raise ValidationError(f"archive file cannot be read: {member.name!r}")
+                with source, target.open("xb") as output:
+                    shutil.copyfileobj(source, output, length=1024 * 1024)
+    except BaseException:
+        if destination_path.exists():
+            shutil.rmtree(destination_path)
+        raise
+    return destination_path
 
 
 class ArtifactStore:
@@ -79,11 +159,7 @@ class ArtifactStore:
         return target
 
     def sha256(self, relative: str | Path) -> str:
-        digest = hashlib.sha256()
-        with self.resolve(relative).open("rb") as stream:
-            for block in iter(lambda: stream.read(1024 * 1024), b""):
-                digest.update(block)
-        return digest.hexdigest()
+        return sha256_file(self.resolve(relative))
 
     def export(self, output: str | Path) -> Path:
         """Export regular files without following symlinks."""

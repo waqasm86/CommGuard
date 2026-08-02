@@ -1,21 +1,40 @@
 # Artifact schemas
 
-All JSON/JSONL records carry `artifact_kind` and `schema_version`. Version `1.0`
-is additive-only. A future breaking change must use a new major schema version
-and an explicit, tested migration; raw evidence itself is never rewritten.
+All JSON/JSONL records carry `artifact_kind` and `schema_version`. Historical
+version `1.0` remains readable. New provenance and corpus manifests use version
+`2.0`; its non-destructive legacy view is documented in
+[`schema-migrations.md`](schema-migrations.md). Raw evidence is never rewritten.
 
 ## Environment report
 
 Records Python/OS/kernel, GPUs, driver, CUDA/PyTorch/NCCL, packages, topology
-command, peer capability, RAM/disk, optional network check, source commit,
-session fingerprint, and readiness gates.
+command, peer capability, RAM/disk, optional network check, source state,
+experiment session, node, environment fingerprint, and readiness gates. The
+environment fingerprint describes stable capabilities and is not a session ID.
 
 ## Run manifest
 
-Records identity, label/family/designation, seed, model/workload dimensions,
+Records session/corpus/collection/run/node identity, label/family/designation,
+seed, model/workload dimensions,
 precision, batch/sequence/accumulation, world size, environment fingerprint,
 source commit, warmup, timestamps, NCCL environment, rank exit codes,
-participation validity, failure category/reason, and exit status.
+participation validity, failure category/reason, source dirty state, optional
+notebook/input archive provenance, and exit status. Completed, participation-
+valid version 2 runs also record the common monotonic measurement start, end,
+and duration. Validation requires those three values to be ordered and exactly
+consistent; they describe the intersection of the two rank-local measured
+intervals.
+
+## Corpus manifest
+
+Declares every planned family/label/configuration slot and the exact accepted
+run allow-list. A run can fill at most one slot, and designation-aware selection
+prevents calibration controls from leaking into benign evaluation. Matrix
+orchestration writes a plan manifest before execution with an empty allow-list,
+then a separate final manifest after execution; neither artifact is rewritten.
+The final benign manifest carries an exact calibration reference: artifact-root
+relative path, SHA-256, experiment session, collection, environment fingerprint,
+source commit, schema, status, and current/prior-session relationship.
 
 ## Telemetry sample
 
@@ -24,9 +43,93 @@ nine `FieldReading` objects. A supported field contains a finite value and unit.
 An unsupported field contains `value: null`, `supported: false`, and an error.
 Zeros remain legitimate measurements and are not used as missing sentinels.
 
+## Feature extraction and coverage
+
+Version 2 extraction is selected only through a declared corpus manifest. It
+writes three linked, create-only artifacts under `features/`: feature-row
+JSONL, coverage-record JSONL, and an extraction summary JSON. The summary names
+the exact two JSONL inputs, records the requested windows, and labels 30 seconds
+as the primary policy while 5- and 15-second windows remain diagnostic.
+
+There is exactly one coverage record per planned corpus slot. It records the
+plan/run/family/label/session/collection/corpus/node context, inclusion status,
+structured reason code and detail, rows per GPU, common monotonic interval,
+warmup and usable duration, per-GPU sampling-gap statistics, timestamp-aligned
+pair count/tolerance, and emitted counts for every requested window. Missing,
+short, invalid, or unaligned evidence is therefore represented explicitly
+rather than disappearing from the feature table.
+
+Version 1 feature rows remain loadable and are marked as having ambiguous
+legacy grouping when migrated in memory. Direct low-level feature extraction
+without corpus provenance returns version 1-compatible diagnostic rows; new
+persisted research extraction uses version 2 rows with true grouping IDs.
+
+Version 2 feature rows also carry a stable `workload_config_id`. An explicit
+planned ID is used when supplied; otherwise the ID is deterministically derived
+from the family and canonical serialized configuration, so repetitions share a
+configuration identity without sharing a run identity.
+
+Extraction summaries also record the exact selected designations. Benign-only
+selection remains the default; a deliberately combined benign/adversarial
+corpus may request both without relabeling either designation. Calibration
+remains excluded unless it is separately and explicitly selected.
+
+New benign extraction summaries copy the final manifest's calibration reference
+so detector evaluation can verify one exact artifact before coverage/model work.
+Wrong hashes, missing files, incompatible schemas/source commits, and unintended
+session or hardware relationships are hard failures. Schema-1 evidence remains
+readable for explicitly labeled historical/negative reporting but is never
+upgraded into a modern capture-gate pass.
+
+Loaders can bind an exact extraction-summary path within an artifact root. This
+prevents a later adversarial extraction from silently replacing the benign
+coverage source merely because it has the newest timestamp. Evaluation applies
+the primary gate to the explicitly selected benign extraction and may append a
+separate adversarial-only extraction only for frozen robustness scoring.
+
+## Split and evaluation artifacts
+
+A split plan records the requested mode, actual strategy, deterministic seed,
+diagnostic flag, exact run and session groups, and per-split class/family/config
+run counts. Primary plans require non-empty train/validation/test partitions,
+both target classes, and every required family in each partition. Family and
+configuration holdouts are explicitly diagnostic.
+
+Version 2 evaluation results contain a 30-second
+`primary_communication_only` block, the complete split plan and assignments,
+train/validation/test sample counts, train-only preprocessing disclosure,
+validation-only model/threshold selection metadata, run/window/per-family
+metrics, hard-negative false-positive rates, abstention coverage/selective
+risk, and warnings. Confidence intervals are null when independent test groups
+are insufficient. Non-communication and combined ablations are diagnostics.
+
 ## Other records
 
 Workload events retain rank-local progress and checksums. Feature rows retain
 split metadata separately from numeric features. Split assignments map a whole
 run to one split. Evaluation and calibration results record their thresholds,
 metrics, grouping unit, limitations, and source artifacts.
+
+Schema-2 calibration results distinguish `idle_baseline` and `collective`
+observations and record repetition/capture thresholds, per-payload capture
+rates, idle completeness, monotonicity, dynamic range, a decision state, and
+whether the modern capture gate passed. A schema-2 `supported` result requires
+the idle-aware gate. Legacy compatibility is confined to schema 1.
+
+Completed version 2 adversarial run manifests additionally require a
+`strategy_summary` and peak-memory evidence from both ranks. Expected/actual
+sync rounds must match within and across ranks; communication bytes are labeled
+as a proxy; throughput/loss/wall-time counters are finite; training strategies
+must end in parameter agreement. Detector score is null at run time and can be
+created only by a later frozen evaluation artifact.
+
+## Central protocol messages
+
+Central-monitoring messages use protocol version `1.0`, separate from research
+artifact schema versioning. `telemetry_batch` and `heartbeat` messages carry
+agent/node/session identity, a strictly increasing sequence, UTC time, and an
+HMAC-SHA256 signature. Batches also carry a unique ID, previous-batch link,
+monotonic interval, and exact allow-listed telemetry samples. Responses are
+`ingestion_ack`, `protocol_error`, and `detector_decision` records. Decisions
+include score (or null on abstention), threshold, reason, model name/version,
+and evidence window IDs. Offline request/ack logs are create-only.

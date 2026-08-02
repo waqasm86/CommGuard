@@ -3,7 +3,14 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from commguard.features import extract_run_features, numeric_feature_columns
-from commguard.schemas import FIELD_UNITS, TELEMETRY_FIELDS, FieldReading, TelemetrySample
+from commguard.schemas import (
+    FIELD_UNITS,
+    LEGACY_SCHEMA_VERSION,
+    TELEMETRY_FIELDS,
+    FieldReading,
+    TelemetrySample,
+    validate_artifact,
+)
 
 
 def telemetry() -> list[dict]:
@@ -45,6 +52,8 @@ def test_features_are_deterministic_and_cross_gpu() -> None:
     second = extract_run_features(manifest(), telemetry(), window_lengths=(5,), stride_fraction=1)
     assert first == second
     assert first
+    assert first[0]["schema_version"] == LEGACY_SCHEMA_VERSION
+    validate_artifact(first[0])
     assert first[0]["cross_gpu__power_draw_w__mean_abs_difference"] == 1
     assert first[0]["gpu0__pcie_tx_bytes_per_s__mean"] is not None
 

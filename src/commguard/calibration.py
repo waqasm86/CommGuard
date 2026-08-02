@@ -2,13 +2,37 @@
 
 from __future__ import annotations
 
+import json
 import math
 import statistics
 from collections import defaultdict
 from collections.abc import Iterable
+from pathlib import Path
 from typing import Any
 
-from commguard.schemas import SCHEMA_VERSION
+from commguard.artifacts import sha256_file
+from commguard.exceptions import CalibrationError
+from commguard.schemas import (
+    CURRENT_SCHEMA_VERSION,
+    LEGACY_SCHEMA_VERSION,
+    SUPPORTED_SCHEMA_VERSIONS,
+    validate_artifact,
+)
+
+STANDARD_CALIBRATION_PAYLOAD_MIB = (1, 4, 16, 64)
+STANDARD_CALIBRATION_REPETITIONS = 3
+CALIBRATION_REFERENCE_FIELDS = (
+    "calibration_artifact_path",
+    "calibration_sha256",
+    "calibration_experiment_session_id",
+    "calibration_collection_id",
+    "calibration_environment_fingerprint",
+    "calibration_source_commit",
+    "calibration_schema_version",
+    "calibration_status",
+    "calibration_relationship",
+    "calibration_created_in_current_session",
+)
 
 
 def _ranks(values: list[float]) -> list[float]:
@@ -32,12 +56,9 @@ def _correlation(left: list[float], right: list[float]) -> float | None:
         return None
     left_mean = statistics.fmean(left)
     right_mean = statistics.fmean(right)
-    numerator = sum(
-        (x - left_mean) * (y - right_mean) for x, y in zip(left, right, strict=False)
-    )
+    numerator = sum((x - left_mean) * (y - right_mean) for x, y in zip(left, right, strict=False))
     denominator = math.sqrt(
-        sum((x - left_mean) ** 2 for x in left)
-        * sum((y - right_mean) ** 2 for y in right)
+        sum((x - left_mean) ** 2 for x in left) * sum((y - right_mean) ** 2 for y in right)
     )
     return numerator / denominator if denominator else None
 
@@ -99,18 +120,22 @@ def analyze_calibration(
     minimum_sizes: int = 3,
     minimum_rank_correlation: float = 0.7,
     minimum_dynamic_range: float = 1.2,
-    minimum_repetitions: int = 1,
+    minimum_repetitions: int | None = None,
     minimum_capture_rate: float = 0.8,
     baseline_multiplier: float = 3.0,
     baseline_floor_bytes_per_s: float = 1_000_000.0,
+    *,
+    legacy_compatibility: bool = False,
 ) -> dict[str, Any]:
     """Assess response monotonicity and per-payload capture repeatability.
 
-    Rows with ``is_idle`` establish a capture threshold. For backward
-    compatibility, legacy inputs without any idle rows do not apply the capture
-    gate: every otherwise usable repetition counts as captured. The returned
-    artifact records that compatibility mode explicitly.
+    New schema-2 evidence must include repeated ``idle_baseline`` and
+    ``collective`` observations. ``legacy_compatibility`` is narrowly scoped to
+    re-analysis/reporting of old schema-1 evidence and can never establish that
+    the modern capture gate passed.
     """
+    if minimum_repetitions is None:
+        minimum_repetitions = 1 if legacy_compatibility else STANDARD_CALIBRATION_REPETITIONS
     _validate_thresholds(
         minimum_sizes,
         minimum_rank_correlation,
@@ -121,17 +146,29 @@ def analyze_calibration(
         baseline_floor_bytes_per_s,
     )
 
-    rows = list(observations)
-    idle_rows = [row for row in rows if row.get("is_idle")]
+    rows: list[dict[str, Any]] = []
+    invalid_observation_type_count = 0
+    for supplied in observations:
+        row = dict(supplied)
+        observation_type = row.get("observation_type")
+        if observation_type is None:
+            observation_type = "idle_baseline" if row.get("is_idle") else "collective"
+        if observation_type not in {"idle_baseline", "collective"}:
+            invalid_observation_type_count += 1
+        row["observation_type"] = observation_type
+        row["is_idle"] = observation_type == "idle_baseline"
+        rows.append(row)
+    idle_rows = [row for row in rows if row.get("observation_type") == "idle_baseline"]
     idle_signals = [
         signal
         for row in idle_rows
         if row.get("pcie_supported")
-        and (signal := _nonnegative_number(row.get("pcie_total_mean_bytes_per_s")))
-        is not None
+        and row.get("participation_valid")
+        and (signal := _nonnegative_number(row.get("pcie_total_mean_bytes_per_s"))) is not None
     ]
     idle_median = statistics.median(idle_signals) if idle_signals else None
-    capture_gate_applied = idle_median is not None
+    idle_baseline_complete = len(idle_signals) >= minimum_repetitions
+    capture_gate_applied = idle_median is not None and not legacy_compatibility
     capture_threshold = (
         max(
             idle_median * baseline_multiplier,
@@ -144,7 +181,9 @@ def analyze_calibration(
     grouped: dict[float, list[dict[str, Any]]] = defaultdict(list)
     invalid_payload_count = 0
     for row in rows:
-        if row.get("is_idle"):
+        if row.get("observation_type") == "idle_baseline":
+            continue
+        if row.get("observation_type") != "collective":
             continue
         payload = _nonnegative_number(row.get("payload_mib"))
         if payload is None:
@@ -171,13 +210,17 @@ def analyze_calibration(
 
         median = statistics.median(values) if values else None
         mean = statistics.fmean(values) if values else None
-        if capture_threshold is None:
+        if legacy_compatibility and capture_threshold is None:
             capture_success_count = len(values)
+        elif capture_threshold is None:
+            capture_success_count = 0
         else:
             capture_success_count = sum(value > capture_threshold for value in values)
         capture_rate = capture_success_count / len(values) if values else 0.0
         enough_repetitions = len(values) >= minimum_repetitions
-        passes_capture_gate = not capture_gate_applied or capture_rate >= minimum_capture_rate
+        passes_capture_gate = legacy_compatibility or (
+            capture_gate_applied and capture_rate >= minimum_capture_rate
+        )
 
         if not values:
             coefficient_of_variation = None
@@ -194,9 +237,7 @@ def analyze_calibration(
                 "usable_repetitions": len(values),
                 "median_bytes_per_s": median,
                 "mean_bytes_per_s": mean,
-                "mad_bytes_per_s": (
-                    _median_absolute_deviation(values) if values else None
-                ),
+                "mad_bytes_per_s": (_median_absolute_deviation(values) if values else None),
                 "coefficient_of_variation": coefficient_of_variation,
                 "capture_success_count": capture_success_count,
                 "capture_rate": capture_rate,
@@ -205,14 +246,10 @@ def analyze_calibration(
         )
 
     usable_summaries = [
-        summary
-        for summary in payload_summaries
-        if summary["median_bytes_per_s"] is not None
+        summary for summary in payload_summaries if summary["median_bytes_per_s"] is not None
     ]
     payloads = [float(summary["payload_mib"]) for summary in usable_summaries]
-    median_signals = [
-        float(summary["median_bytes_per_s"]) for summary in usable_summaries
-    ]
+    median_signals = [float(summary["median_bytes_per_s"]) for summary in usable_summaries]
     rank_correlation = (
         _correlation(_ranks(payloads), _ranks(median_signals))
         if len(usable_summaries) >= 2
@@ -220,9 +257,7 @@ def analyze_calibration(
     )
     positive_signals = [value for value in median_signals if value > 0]
     dynamic_range = (
-        max(positive_signals) / min(positive_signals)
-        if len(positive_signals) >= 2
-        else None
+        max(positive_signals) / min(positive_signals) if len(positive_signals) >= 2 else None
     )
 
     reliable_payloads = [
@@ -241,14 +276,22 @@ def analyze_calibration(
     reasons: list[str] = []
     if not rows:
         reasons.append("no calibration observations were provided")
-    if invalid_payload_count:
+    if invalid_observation_type_count:
         reasons.append(
-            f"{invalid_payload_count} non-idle observations had an invalid payload size"
+            f"{invalid_observation_type_count} observations had an invalid observation type"
         )
+    if not legacy_compatibility and not idle_rows:
+        reasons.append("modern calibration requires explicit idle baseline observations")
+    if not legacy_compatibility and len(idle_signals) < minimum_repetitions:
+        reasons.append(
+            f"only {len(idle_signals)} usable idle baseline repetitions; "
+            f"at least {minimum_repetitions} are required"
+        )
+    if invalid_payload_count:
+        reasons.append(f"{invalid_payload_count} non-idle observations had an invalid payload size")
     if unsupported_count:
         reasons.append(
-            "PCIe TX/RX was unsupported in "
-            f"{unsupported_count} calibration observations"
+            f"PCIe TX/RX was unsupported in {unsupported_count} calibration observations"
         )
     if idle_rows and not idle_signals:
         reasons.append("idle baseline rows were present but none had a usable PCIe reading")
@@ -257,34 +300,22 @@ def analyze_calibration(
             f"{invalid_idle_count} idle baseline observations had no usable PCIe reading"
         )
     if invalid_participation_count:
-        reasons.append(
-            f"{invalid_participation_count} observations had invalid rank participation"
-        )
+        reasons.append(f"{invalid_participation_count} observations had invalid rank participation")
     if invalid_signal_count:
-        reasons.append(
-            f"{invalid_signal_count} supported observations had no usable PCIe reading"
-        )
+        reasons.append(f"{invalid_signal_count} supported observations had no usable PCIe reading")
     if len(usable_summaries) < minimum_sizes:
         reasons.append(
             f"only {len(usable_summaries)} usable payload sizes; "
             f"at least {minimum_sizes} are required"
         )
     if rank_correlation is None or rank_correlation < minimum_rank_correlation:
-        reasons.append(
-            f"rank correlation {rank_correlation!r} is below "
-            f"{minimum_rank_correlation}"
-        )
+        reasons.append(f"rank correlation {rank_correlation!r} is below {minimum_rank_correlation}")
     if dynamic_range is None or dynamic_range < minimum_dynamic_range:
-        reasons.append(
-            f"dynamic range {dynamic_range!r} is below {minimum_dynamic_range}"
-        )
+        reasons.append(f"dynamic range {dynamic_range!r} is below {minimum_dynamic_range}")
     if not reliable_payloads:
         reasons.append("no payload group passed the repetition-aware capture gate")
     if unreliable_payloads:
-        reasons.append(
-            "repetition-aware capture gate failed for payloads: "
-            f"{unreliable_payloads}"
-        )
+        reasons.append(f"repetition-aware capture gate failed for payloads: {unreliable_payloads}")
 
     aggregate_gate_failed = (
         len(usable_summaries) < minimum_sizes
@@ -296,8 +327,10 @@ def analyze_calibration(
     )
     hard_falsification = (
         not rows
+        or bool(invalid_observation_type_count)
         or bool(unsupported_count)
         or bool(idle_rows and not idle_signals)
+        or (not legacy_compatibility and not idle_baseline_complete)
         or aggregate_gate_failed
     )
     if hard_falsification:
@@ -312,26 +345,52 @@ def analyze_calibration(
         "PyTorch timing and NVML PCIe readings are distinct evidence channels.",
         "This decision does not transfer beyond the recorded dual-T4 session.",
     ]
-    if not idle_rows:
+    if legacy_compatibility:
         limitations.append(
-            "No idle baseline was supplied; capture counts use legacy compatibility mode."
+            "Legacy compatibility does not establish that the modern idle-baseline capture "
+            "gate passed."
         )
 
     return {
         "artifact_kind": "calibration_result",
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": (
+            LEGACY_SCHEMA_VERSION if legacy_compatibility else CURRENT_SCHEMA_VERSION
+        ),
+        "calibration_contract_version": (
+            "legacy-1.0-compatibility" if legacy_compatibility else "idle-aware-repeated-v2"
+        ),
+        "legacy_compatibility_applied": legacy_compatibility,
+        "modern_capture_gate_passed": (
+            not legacy_compatibility
+            and status == "supported"
+            and capture_gate_applied
+            and idle_baseline_complete
+        ),
+        "decision_state": (
+            "passed"
+            if status == "supported" and not legacy_compatibility
+            else "legacy_compatible"
+            if status == "supported"
+            else "inconclusive"
+            if status == "partially_supported"
+            else "failed"
+        ),
         "status": status,
         "signal_name": "NVML PCIe traffic readings",
         "observations": sorted(rows, key=_observation_sort_key),
         "payload_summaries": payload_summaries,
         "idle_baseline_median_bytes_per_s": idle_median,
+        "idle_baseline_repetitions": len(idle_rows),
+        "idle_baseline_usable_repetitions": len(idle_signals),
+        "idle_baseline_complete": idle_baseline_complete,
         "capture_threshold_bytes_per_s": capture_threshold,
         "capture_gate_applied": capture_gate_applied,
         "capture_gate_note": (
-            "Capture requires exceeding the idle-derived threshold."
+            "Capture requires exceeding the idle-derived threshold for each payload."
             if capture_gate_applied
-            else "No idle rows were supplied; usable repetitions count as captured for "
-            "backward compatibility."
+            else "Legacy compatibility mode does not apply the modern idle-derived capture gate."
+            if legacy_compatibility
+            else "The modern idle-derived capture gate could not be applied."
         ),
         "supported_payload_range_mib": reliable_payloads,
         "unreliable_payload_range_mib": unreliable_payloads,
@@ -353,6 +412,9 @@ def analyze_calibration(
         "falsification_reasons": reasons,
         "claim": (
             "Calibration supports proceeding within this exact session."
+            if status == "supported" and not legacy_compatibility
+            else "Legacy evidence is readable under its historical contract; the modern "
+            "capture gate is not satisfied."
             if status == "supported"
             else "Calibration supports only the reported reliable payload groups."
             if status == "partially_supported"
@@ -360,3 +422,133 @@ def analyze_calibration(
         ),
         "limitations": limitations,
     }
+
+
+def build_calibration_reference(
+    artifact_root: str | Path,
+    calibration_path: str | Path,
+    *,
+    current_experiment_session_id: str,
+) -> dict[str, Any]:
+    """Build a stable exact-file reference without mutating calibration evidence."""
+    root = Path(artifact_root).resolve()
+    candidate = Path(calibration_path)
+    path = candidate.resolve() if candidate.is_absolute() else (root / candidate).resolve()
+    try:
+        relative = path.relative_to(root)
+    except ValueError as exc:
+        raise CalibrationError(f"calibration artifact is outside artifact root: {path}") from exc
+    if not path.is_file():
+        raise CalibrationError(f"referenced calibration artifact is missing: {relative}")
+    calibration = json.loads(path.read_text(encoding="utf-8"))
+    validate_artifact(calibration)
+    session_id = str(calibration.get("experiment_session_id", ""))
+    relationship = (
+        "current_session" if session_id == current_experiment_session_id else "prior_session"
+    )
+    return {
+        "calibration_artifact_path": relative.as_posix(),
+        "calibration_sha256": sha256_file(path),
+        "calibration_experiment_session_id": session_id or None,
+        "calibration_collection_id": calibration.get("collection_id"),
+        "calibration_environment_fingerprint": calibration.get("environment_fingerprint"),
+        "calibration_source_commit": calibration.get("source_commit"),
+        "calibration_schema_version": calibration.get("schema_version"),
+        "calibration_status": calibration.get("status"),
+        "calibration_relationship": relationship,
+        "calibration_created_in_current_session": relationship == "current_session",
+    }
+
+
+def verify_calibration_reference(
+    artifact_root: str | Path,
+    reference: dict[str, Any],
+    *,
+    expected_experiment_session_ids: set[str] | None = None,
+    expected_environment_fingerprints: set[str] | None = None,
+    expected_source_commits: set[str] | None = None,
+    require_current_session: bool = True,
+    allow_legacy: bool = False,
+    require_supported: bool = True,
+) -> tuple[Path, dict[str, Any]]:
+    """Load one exact calibration and verify its authenticated provenance fields."""
+    missing = [name for name in CALIBRATION_REFERENCE_FIELDS if name not in reference]
+    if missing:
+        raise CalibrationError(f"calibration reference is missing fields: {missing}")
+    root = Path(artifact_root).resolve()
+    relative = Path(str(reference["calibration_artifact_path"]))
+    if relative.is_absolute():
+        raise CalibrationError("calibration_artifact_path must be artifact-root-relative")
+    path = (root / relative).resolve()
+    try:
+        path.relative_to(root)
+    except ValueError as exc:
+        raise CalibrationError("calibration artifact path escapes the artifact root") from exc
+    if not path.is_file():
+        raise CalibrationError(f"referenced calibration artifact is missing: {relative}")
+    actual_hash = sha256_file(path)
+    if actual_hash != reference["calibration_sha256"]:
+        raise CalibrationError(
+            "calibration SHA-256 mismatch: "
+            f"expected={reference['calibration_sha256']} actual={actual_hash}"
+        )
+    calibration = json.loads(path.read_text(encoding="utf-8"))
+    validate_artifact(calibration)
+    comparisons = {
+        "experiment_session_id": "calibration_experiment_session_id",
+        "collection_id": "calibration_collection_id",
+        "environment_fingerprint": "calibration_environment_fingerprint",
+        "source_commit": "calibration_source_commit",
+        "schema_version": "calibration_schema_version",
+        "status": "calibration_status",
+    }
+    for artifact_field, reference_field in comparisons.items():
+        if calibration.get(artifact_field) != reference.get(reference_field):
+            raise CalibrationError(
+                f"calibration reference mismatch for {artifact_field}: "
+                f"reference={reference.get(reference_field)!r} "
+                f"artifact={calibration.get(artifact_field)!r}"
+            )
+    schema_version = str(calibration.get("schema_version"))
+    if schema_version not in SUPPORTED_SCHEMA_VERSIONS:
+        raise CalibrationError(f"incompatible calibration schema: {schema_version}")
+    if not allow_legacy and schema_version != CURRENT_SCHEMA_VERSION:
+        raise CalibrationError(
+            f"modern evaluation requires calibration schema {CURRENT_SCHEMA_VERSION}; "
+            f"observed={schema_version}"
+        )
+    if require_supported and calibration.get("status") != "supported":
+        raise CalibrationError(
+            f"referenced calibration is not supported: {calibration.get('status')}"
+        )
+    if (
+        require_supported
+        and schema_version == CURRENT_SCHEMA_VERSION
+        and not calibration.get("modern_capture_gate_passed")
+    ):
+        raise CalibrationError("modern calibration did not pass the idle-aware capture gate")
+    relationship = str(reference["calibration_relationship"])
+    created_current = bool(reference["calibration_created_in_current_session"])
+    if created_current != (relationship == "current_session"):
+        raise CalibrationError("calibration current/prior-session labels conflict")
+    if require_current_session and relationship != "current_session":
+        raise CalibrationError("current collection requires a current-session calibration")
+    checks = (
+        (
+            "experiment session",
+            expected_experiment_session_ids,
+            calibration.get("experiment_session_id"),
+        ),
+        (
+            "environment fingerprint",
+            expected_environment_fingerprints,
+            calibration.get("environment_fingerprint"),
+        ),
+        ("source commit", expected_source_commits, calibration.get("source_commit")),
+    )
+    for label, expected, observed in checks:
+        if expected is not None and (len(expected) != 1 or observed not in expected):
+            raise CalibrationError(
+                f"calibration {label} mismatch: expected={sorted(expected)} observed={observed!r}"
+            )
+    return path, calibration

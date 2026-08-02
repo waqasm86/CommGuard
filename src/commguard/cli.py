@@ -46,7 +46,7 @@ def _parser() -> argparse.ArgumentParser:
     calibrate.add_argument("--output", type=Path, default=Path("artifacts"))
     calibrate.add_argument("--payload-mib", type=int, nargs="+", default=[1, 4, 16, 64])
     calibrate.add_argument("--collective", default="all_reduce")
-    calibrate.add_argument("--repetitions", type=int, default=1)
+    calibrate.add_argument("--repetitions", type=int, default=3)
     calibrate.add_argument("--timeout", type=float, default=180)
 
     run = subparsers.add_parser("run", help="run one workload or a profile")
@@ -57,6 +57,11 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--repetitions", type=int)
     run.add_argument("--timeout", type=float, default=180)
     run.add_argument("--negative-calibration-mode", action="store_true")
+    run.add_argument(
+        "--approve-bounded-redteam",
+        action="store_true",
+        help="explicitly approve one reviewed adversarial workload (never implied by a profile)",
+    )
 
     estimate = subparsers.add_parser("estimate", help="estimate profile cost without running GPUs")
     estimate.add_argument("--profile", choices=("smoke", "standard", "extended"), default="smoke")
@@ -65,13 +70,22 @@ def _parser() -> argparse.ArgumentParser:
     features = subparsers.add_parser("features", help="derive deterministic feature windows")
     features.add_argument("--input", type=Path, default=Path("artifacts"))
     features.add_argument("--output", type=Path, default=Path("artifacts"))
-    features.add_argument("--windows", type=float, nargs="+", default=[5, 15, 30])
+    features.add_argument("--corpus-manifest", type=Path, required=True)
+    features.add_argument(
+        "--windows",
+        type=float,
+        nargs="+",
+        default=[5, 15, 30],
+        help="requested windows; 30 seconds is primary and 5/15 are diagnostic",
+    )
+    features.add_argument("--alignment-tolerance-seconds", type=float, default=0.25)
     features.add_argument("--include-startup", action="store_true")
 
     evaluate = subparsers.add_parser("evaluate", help="run grouped detector evaluation")
     evaluate.add_argument("--input", type=Path, default=Path("artifacts"))
     evaluate.add_argument("--output", type=Path, default=Path("artifacts"))
     evaluate.add_argument("--negative-calibration-mode", action="store_true")
+    evaluate.add_argument("--minimum-runs-per-family", type=int, default=3)
 
     report = subparsers.add_parser("report", help="generate an evidence-grounded report")
     report.add_argument("--input", type=Path, default=Path("artifacts"))
@@ -111,6 +125,7 @@ def main(argv: list[str] | None = None) -> int:
                     args.workload,
                     output=args.output,
                     timeout_s=args.timeout,
+                    adversarial_approval=args.approve_bounded_redteam,
                 )
                 _json({"run_id": result["run_id"], "manifest": result["manifest"]})
             else:
@@ -131,6 +146,8 @@ def main(argv: list[str] | None = None) -> int:
                 output=args.output,
                 window_lengths=args.windows,
                 exclude_startup=not args.include_startup,
+                corpus_manifest=args.corpus_manifest,
+                alignment_tolerance_seconds=args.alignment_tolerance_seconds,
             )
             _json({"feature_rows": len(rows), "output": str(args.output)})
         elif args.command == "evaluate":
@@ -139,6 +156,7 @@ def main(argv: list[str] | None = None) -> int:
                     input_root=args.input,
                     output=args.output,
                     negative_calibration_mode=args.negative_calibration_mode,
+                    minimum_runs_per_family=args.minimum_runs_per_family,
                 )
             )
         elif args.command == "report":

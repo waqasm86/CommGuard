@@ -6,11 +6,27 @@ import json
 from pathlib import Path
 from typing import Any
 
+from commguard.artifacts import sha256_file
+from commguard.calibration import verify_calibration_reference
+from commguard.exceptions import CalibrationError
+from commguard.schemas import LEGACY_SCHEMA_VERSION
+
 NON_AFFILIATION = (
     "This is an independent, unofficial research prototype. It is not affiliated with or "
     "endorsed by SPAR, Kairos, ERA, UChicago XLab, William Fowler, or the authors and "
     "institutions cited in the related literature."
 )
+
+
+def _adversarial_result_text(family: str, result: dict[str, Any]) -> str:
+    status = str(result.get("status", "unavailable"))
+    if status == "evaluated_frozen_benign_only_baseline":
+        if result.get("target_is_training"):
+            return f"{family}: evasion rate {result.get('evasion_rate')}"
+        return f"{family}: false-positive rate {result.get('false_positive_rate')}"
+    if status == "sealed_final_holdout":
+        return f"{family}: sealed final holdout (not scored)"
+    return f"{family}: {status.replace('_', ' ')}"
 
 
 def _latest_json(directory: Path, pattern: str) -> dict[str, Any] | None:
@@ -20,19 +36,81 @@ def _latest_json(directory: Path, pattern: str) -> dict[str, Any] | None:
     return json.loads(paths[-1].read_text(encoding="utf-8"))
 
 
+def _latest_path(directory: Path, pattern: str) -> Path | None:
+    paths = sorted(directory.glob(pattern))
+    return paths[-1] if paths else None
+
+
+def _calibration_for_report(
+    root: Path,
+    matrix: dict[str, Any] | None,
+) -> tuple[Path | None, dict[str, Any] | None, bool]:
+    reference = matrix.get("calibration_reference") if matrix else None
+    if isinstance(reference, dict):
+        path, calibration = verify_calibration_reference(root, reference)
+        return path, calibration, False
+    candidates = sorted((root / "results").glob("calibration-*.json"))
+    if not candidates:
+        return None, None, False
+    legacy = [(path, json.loads(path.read_text(encoding="utf-8"))) for path in candidates]
+    legacy = [item for item in legacy if item[1].get("schema_version") == LEGACY_SCHEMA_VERSION]
+    if len(candidates) != 1 or len(legacy) != 1:
+        raise CalibrationError(
+            "reporting found calibration artifacts without one exact modern reference; "
+            "refusing filename-order selection"
+        )
+    return legacy[0][0], legacy[0][1], True
+
+
+def _metric(value: Any) -> str:
+    return "unavailable" if value is None else f"{float(value):.3f}"
+
+
+def _primary_result(evaluation: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
+    current = evaluation.get("primary_communication_only", {}).get("metrics")
+    if isinstance(current, dict):
+        return "communication_only", current
+    legacy = evaluation.get("ablations", {}).get("pcie_only")
+    if isinstance(legacy, dict):
+        return "pcie_only_legacy", legacy
+    return None
+
+
+def _selected_metrics(result: dict[str, Any]) -> tuple[str, dict[str, Any], dict[str, Any]]:
+    if "selected_model" in result:
+        return (
+            str(result["selected_model"]),
+            dict(result.get("window_level", {})),
+            dict(result.get("run_level", {})),
+        )
+    model = str(result.get("best_model", "unavailable"))
+    return model, dict(result.get(model, {})), dict(result.get("run_level", {}))
+
+
+def _ablation_summary(name: str, result: dict[str, Any]) -> str:
+    model, window, run = _selected_metrics(result)
+    return (
+        f"- `{name}`: selected `{model}`; window balanced accuracy "
+        f"{_metric(window.get('balanced_accuracy'))}; run balanced accuracy "
+        f"{_metric(run.get('balanced_accuracy'))}."
+    )
+
+
 def generate_report(
     input_root: str | Path = "artifacts",
     output: str | Path | None = None,
 ) -> str:
     """Generate a report using only available saved evidence."""
     root = Path(input_root)
-    manifests = [
-        json.loads(path.read_text(encoding="utf-8"))
-        for path in sorted((root / "runs").glob("*/manifest.json"))
-    ]
+    manifest_paths = sorted((root / "runs").glob("*/manifest.json"))
+    manifests = [json.loads(path.read_text(encoding="utf-8")) for path in manifest_paths]
+    preflight_path = _latest_path(root / "environment", "preflight-*.json")
+    evaluation_path = _latest_path(root / "results", "evaluation-*.json")
+    matrix_path = _latest_path(root / "results", "matrix-*.json")
     preflight = _latest_json(root / "environment", "preflight-*.json")
-    calibration = _latest_json(root / "results", "calibration-*.json")
     evaluation = _latest_json(root / "results", "evaluation-*.json")
+    matrix = _latest_json(root / "results", "matrix-*.json")
+    calibration_path, calibration, calibration_is_legacy = _calibration_for_report(root, matrix)
     completed = [item for item in manifests if item["exit_status"] == "completed"]
     failed = [item for item in manifests if item["exit_status"] != "completed"]
     lines = [
@@ -121,21 +199,73 @@ def generate_report(
         "Majority, a fitted low-dimensional PCIe rule, logistic regression, and random "
         "forest are compared. PCIe-only, non-PCIe, and combined ablations are separate.",
         "",
+        "## Corpus coverage",
+        "",
+    ]
+    if matrix and matrix.get("family_counts"):
+        lines += [
+            "| Family | Planned | Completed | Failed | Primary valid | Excluded |",
+            "|---|---:|---:|---:|---:|---:|",
+        ]
+        for family, counts in sorted(matrix["family_counts"].items()):
+            lines.append(
+                f"| `{family}` | {counts.get('planned', 0)} | "
+                f"{counts.get('completed', 0)} | {counts.get('failed', 0)} | "
+                f"{counts.get('feature_valid', 0)} | "
+                f"{counts.get('feature_excluded', 0)} |"
+            )
+        gate = matrix.get("primary_coverage_gate", {})
+        lines += ["", f"Saved primary coverage gate passed: `{gate.get('passed', False)}`."]
+    else:
+        lines.append("No saved matrix coverage summary was found; detector coverage is unknown.")
+    lines += [
+        "",
+        "### Split groups",
+        "",
+    ]
+    split_plan = evaluation.get("split_plan") if evaluation else None
+    if isinstance(split_plan, dict):
+        lines += ["| Split | Run count | Session IDs |", "|---|---:|---|"]
+        for split in ("train", "validation", "test"):
+            run_ids = split_plan.get("run_ids_by_split", {}).get(split, [])
+            sessions = split_plan.get("session_ids_by_split", {}).get(split, [])
+            lines.append(f"| {split} | {len(run_ids)} | {', '.join(sessions) or 'none'} |")
+        lines += [
+            "",
+            f"Actual split strategy: `{split_plan.get('actual_strategy', 'unavailable')}`.",
+        ]
+    else:
+        lines.append("No current split-plan artifact was found.")
+    lines += [
+        "",
         "## Benign results",
         "",
     ]
-    if evaluation:
-        combined = evaluation["ablations"]["combined"]
-        best = combined["best_model"]
-        metrics = combined[best]
+    primary = _primary_result(evaluation) if evaluation else None
+    if primary:
+        primary_name, primary_metrics = primary
+        model, window_metrics, run_metrics = _selected_metrics(primary_metrics)
         lines += [
-            f"**Observed:** The combined-signal best baseline was `{best}` on "
-            f"{metrics['sample_count']} held-out windows: balanced accuracy "
-            f"{metrics['balanced_accuracy']:.3f}, F1 {metrics['f1']:.3f}, false-positive "
-            f"rate {metrics['false_positive_rate']}, and false-negative rate "
-            f"{metrics['false_negative_rate']}. Run-level results and per-family metrics "
-            "are stored in the evaluation artifact.",
+            f"**Observed:** The primary `{primary_name}` result selected `{model}`. "
+            f"Window balanced accuracy: {_metric(window_metrics.get('balanced_accuracy'))}; "
+            f"run balanced accuracy: {_metric(run_metrics.get('balanced_accuracy'))}; "
+            f"run false-positive rate: {_metric(run_metrics.get('false_positive_rate'))}; "
+            f"run false-negative rate: {_metric(run_metrics.get('false_negative_rate'))}.",
         ]
+        per_family = primary_metrics.get("per_family", {})
+        if per_family:
+            lines += [
+                "",
+                "| Family | Samples | Balanced accuracy | FPR | FNR |",
+                "|---|---:|---:|---:|---:|",
+            ]
+            for family, metrics in sorted(per_family.items()):
+                lines.append(
+                    f"| `{family}` | {metrics.get('sample_count', 0)} | "
+                    f"{_metric(metrics.get('balanced_accuracy'))} | "
+                    f"{_metric(metrics.get('false_positive_rate'))} | "
+                    f"{_metric(metrics.get('false_negative_rate'))} |"
+                )
     else:
         lines += ["No saved detector evaluation was found; no performance claim is made."]
     lines += [
@@ -147,24 +277,23 @@ def generate_report(
         lines.append(
             "**Observed:** Complete-strategy holdouts: "
             + "; ".join(
-                (
-                    f"{family}: detection "
-                    f"{result.get('training_detection_rate', 'unmeasured')}"
-                    if result.get("status") == "evaluated"
-                    else f"{family}: insufficient data"
-                )
+                _adversarial_result_text(family, result)
                 for family, result in evaluation["heldout_adversarial_families"].items()
             )
             + "."
         )
         costs = evaluation.get("adversarial_efficiency_cost", {}).get("strategies", {})
         if costs:
+            duration_ratios = {
+                family: value.get(
+                    "duration_ratio_vs_baseline",
+                    value.get("duration_ratio_vs_ddp_full_parameter"),
+                )
+                for family, value in costs.items()
+            }
             lines.append(
                 "**Observed:** Median wall-duration ratios versus ordinary DDP: "
-                + "; ".join(
-                    f"{family}: {value['duration_ratio_vs_ddp_full_parameter']}"
-                    for family, value in costs.items()
-                )
+                + "; ".join(f"{family}: {ratio}" for family, ratio in duration_ratios.items())
                 + ". These are coarse duration costs, not FLOP efficiency."
             )
     else:
@@ -173,13 +302,9 @@ def generate_report(
             "adversarial performance claim is made without a saved evaluation artifact."
         )
     lines += ["", "## Ablations", ""]
-    if evaluation:
+    if evaluation and evaluation.get("ablations"):
         for name, result in evaluation["ablations"].items():
-            best = result["best_model"]
-            lines.append(
-                f"- `{name}`: best `{best}`, balanced accuracy "
-                f"{result[best]['balanced_accuracy']:.3f}."
-            )
+            lines.append(_ablation_summary(name, result))
     else:
         lines.append("No saved ablation results were found.")
     lines += [
@@ -193,6 +318,11 @@ def generate_report(
             f"Falsification reasons: "
             f"{'; '.join(calibration['falsification_reasons']) or 'none recorded'}.",
         ]
+        if calibration_is_legacy:
+            lines.append(
+                "**Legacy compatibility:** This schema-1 decision is reported under its "
+                "historical contract and did not pass the modern idle-aware capture gate."
+            )
     else:
         lines += ["Calibration has not been recorded; detector escalation is unsupported."]
     if failed:
@@ -229,7 +359,26 @@ def generate_report(
         "this report are read from saved preflight, manifest, calibration, and evaluation "
         "artifacts.",
         "",
+        "### Input artifact hashes",
+        "",
     ]
+    evidence_paths = [
+        path
+        for path in [
+            preflight_path,
+            calibration_path,
+            evaluation_path,
+            matrix_path,
+            *manifest_paths,
+        ]
+        if path is not None
+    ]
+    if evidence_paths:
+        for path in evidence_paths:
+            lines.append(f"- `{path.relative_to(root)}`: `{sha256_file(path)}`")
+    else:
+        lines.append("No input artifacts were found to hash.")
+    lines.append("")
     report = "\n".join(lines)
     if output is not None:
         target = Path(output)

@@ -11,14 +11,15 @@ import shutil
 import socket
 import subprocess
 import sys
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from commguard.artifacts import ArtifactStore
 from commguard.exceptions import ReadinessError
-from commguard.provenance import source_identifier
-from commguard.schemas import SCHEMA_VERSION
+from commguard.provenance import ProvenanceContext, source_state
+from commguard.schemas import CURRENT_SCHEMA_VERSION
 
 PACKAGES = (
     "torch",
@@ -166,10 +167,43 @@ def _network_status(check: bool) -> dict[str, Any]:
         return {"checked": True, "reachable": False, "reason": str(exc)}
 
 
+def _stable_telemetry_capabilities(capabilities: dict[str, Any]) -> dict[str, Any]:
+    """Remove live measurements while retaining environment capability semantics."""
+    return {
+        "available": capabilities.get("available"),
+        "error": capabilities.get("error"),
+        "devices": [
+            {
+                "gpu_index": device.get("gpu_index"),
+                "gpu_uuid": device.get("gpu_uuid"),
+                "fields": {
+                    name: {
+                        "supported": reading.get("supported"),
+                        "unit": reading.get("unit"),
+                        "error": reading.get("error"),
+                    }
+                    for name, reading in sorted(dict(device.get("fields", {})).items())
+                },
+            }
+            for device in capabilities.get("devices", [])
+        ],
+    }
+
+
+def _environment_fingerprint(data: dict[str, Any]) -> str:
+    """Hash stable environment facts, never an experiment/session identity."""
+    stable = dict(data)
+    stable["telemetry_capabilities"] = _stable_telemetry_capabilities(
+        dict(data.get("telemetry_capabilities", {}))
+    )
+    return hashlib.sha256(json.dumps(stable, sort_keys=True, default=str).encode()).hexdigest()
+
+
 def check_environment(
     strict: bool = False,
     output: str | Path | None = None,
     check_network: bool = False,
+    provenance: ProvenanceContext | None = None,
 ) -> dict[str, Any]:
     """Inspect runtime facts; strict mode requires exactly two NVIDIA T4s and NCCL."""
     gpus, gpu_query = _gpu_inventory()
@@ -218,15 +252,29 @@ def check_environment(
         },
         "telemetry_capabilities": telemetry_capabilities,
     }
-    fingerprint = hashlib.sha256(
-        json.dumps(fingerprint_input, sort_keys=True, default=str).encode()
-    ).hexdigest()
+    fingerprint = _environment_fingerprint(fingerprint_input)
+    if provenance is not None:
+        experiment_session_id = provenance.experiment_session_id
+        node_id = provenance.node_id
+        source_commit = provenance.source_commit
+        source_dirty = provenance.source_dirty
+    else:
+        current_source = source_state()
+        experiment_session_id = f"session-{uuid.uuid4().hex}"
+        node_id = socket.gethostname()
+        source_commit = current_source.commit
+        source_dirty = current_source.dirty
     report: dict[str, Any] = {
         "artifact_kind": "environment_report",
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": CURRENT_SCHEMA_VERSION,
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "experiment_session_id": experiment_session_id,
+        "node_id": node_id,
+        "environment_fingerprint": fingerprint,
+        # Compatibility alias. This is not a true experiment-session identifier.
         "session_fingerprint": fingerprint,
-        "source_commit": source_identifier(),
+        "source_commit": source_commit,
+        "source_dirty": source_dirty,
         "python": {"version": sys.version, "executable": sys.executable},
         "platform": {
             "system": platform.system(),
@@ -260,8 +308,7 @@ def check_environment(
         store = ArtifactStore(output)
         store.initialize()
         store.write_json(
-            "environment/preflight-"
-            f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')}.json",
+            f"environment/preflight-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')}.json",
             report,
         )
     if strict and not strict_ready:
