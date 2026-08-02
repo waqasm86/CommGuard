@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import warnings
+
 import pytest
 
 from commguard.evaluation import (
@@ -8,7 +10,11 @@ from commguard.evaluation import (
     grouped_split,
     make_split_plan,
 )
-from commguard.evaluation.baselines import _evaluate_ablation, _select_model_and_threshold
+from commguard.evaluation.baselines import (
+    _evaluate_ablation,
+    _select_model_and_threshold,
+    _stable_sigmoid,
+)
 from commguard.exceptions import CoverageError
 
 
@@ -257,3 +263,17 @@ def test_leakage_audit_rejects_identity_feature() -> None:
 def test_detector_fitting_requires_calibration(tmp_path) -> None:
     with pytest.raises(CoverageError, match="no feature extraction coverage summary"):
         evaluate_detector(tmp_path)
+
+
+def test_stable_sigmoid_handles_extreme_logits_without_warnings() -> None:
+    np = pytest.importorskip("numpy")
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        probabilities = _stable_sigmoid(np.array([-1e300, -30.0, 0.0, 30.0, 1e300]))
+
+    assert np.all(np.isfinite(probabilities))
+    assert np.all((probabilities >= 0.0) & (probabilities <= 1.0))
+    assert probabilities[0] < probabilities[1] < probabilities[2]
+    assert probabilities[2] < probabilities[3] <= probabilities[4]
+    assert probabilities[2] == 0.5

@@ -161,6 +161,14 @@ def _select_model_and_threshold(
     return selected_model, selected_threshold, model_scores
 
 
+def _stable_sigmoid(raw_logits: Any) -> Any:
+    """Return finite logistic probabilities without overflow warnings."""
+    import numpy as np
+
+    logits = np.clip(np.asarray(raw_logits, dtype=float), -60.0, 60.0)
+    return 1.0 / (1.0 + np.exp(-logits))
+
+
 def _simple_rule(
     train: Any, evaluation: Any, columns: list[str]
 ) -> tuple[Any, Any, dict[str, Any]]:
@@ -185,7 +193,7 @@ def _simple_rule(
     predictions = ((finite - threshold) * direction >= 0).astype(int)
     train_finite = np.nan_to_num(signal.to_numpy(), nan=threshold)
     scale = max(float(np.nanstd(train_finite)), 1.0)
-    probabilities = 1 / (1 + np.exp(-direction * (finite - threshold) / scale))
+    probabilities = _stable_sigmoid(direction * (finite - threshold) / scale)
     return (
         predictions,
         probabilities,
