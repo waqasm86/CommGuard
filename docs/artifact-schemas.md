@@ -12,6 +12,12 @@ command, peer capability, RAM/disk, optional network check, source state,
 experiment session, node, environment fingerprint, and readiness gates. The
 environment fingerprint describes stable capabilities and is not a session ID.
 
+The calibration notebook also writes an `experiment_summary` with
+`summary_type: notebook_bootstrap` before preflight. It records the notebook
+version/run ID, reviewed commit, portable source repository name, GPU summary,
+and current artifact-schema version. It contains no credentials or private host
+path and is included in the exported artifact tree.
+
 ## Run manifest
 
 Records session/corpus/collection/run/node identity, label/family/designation,
@@ -115,6 +121,16 @@ observations and record repetition/capture thresholds, per-payload capture
 rates, idle completeness, monotonicity, dynamic range, a decision state, and
 whether the modern capture gate passed. A schema-2 `supported` result requires
 the idle-aware gate. Legacy compatibility is confined to schema 1.
+
+New calibration trees contain create-only `calibration_sweep_started` and
+`calibration_sweep_completed` experiment summaries keyed by the exact session
+and collection. The start marker declares the expected 15-run matrix; the
+completion marker binds its result path and SHA-256. A start marker without a
+completion marker is preserved partial evidence, never permission to append or
+restart the sweep in place. The clean-standard validator checks unique run IDs,
+three idle observations, three observations at each 1/4/16/64 MiB payload,
+payload-accurate names and manifests, idle event streams without measured
+collectives, and the exact calibration JSON hash reference.
 
 Completed version 2 adversarial run manifests additionally require a
 `strategy_summary` and peak-memory evidence from both ranks. Expected/actual

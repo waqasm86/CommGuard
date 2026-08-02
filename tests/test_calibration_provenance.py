@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -18,6 +19,14 @@ from commguard.exceptions import ArtifactExistsError, CalibrationError
 from commguard.provenance import ProvenanceContext
 from commguard.schemas import CURRENT_SCHEMA_VERSION, LEGACY_SCHEMA_VERSION, validate_artifact
 from commguard.workloads import calibration_workload_name, get_workload
+
+
+def _pcie_sample(monotonic_ns: int, value: float) -> SimpleNamespace:
+    reading = SimpleNamespace(supported=True, value=value)
+    return SimpleNamespace(
+        monotonic_ns=monotonic_ns,
+        fields={"pcie_tx_bytes_per_s": reading, "pcie_rx_bytes_per_s": reading},
+    )
 
 
 def modern_calibration(
@@ -203,6 +212,7 @@ def test_standard_sweep_collects_idle_and_four_repeated_payloads(tmp_path, monke
         random_seed=1337,
     )
     calls: list[tuple[str, dict]] = []
+    progress_events: list[dict] = []
 
     def experiment(workload: str, **kwargs):
         overrides = dict(kwargs["overrides"])
@@ -259,7 +269,11 @@ def test_standard_sweep_collects_idle_and_four_repeated_payloads(tmp_path, monke
         lambda **kwargs: {"environment_fingerprint": "environment-dual-t4"},
     )
 
-    result = orchestrator.run_calibration_sweep(output=tmp_path, provenance=context)
+    result = orchestrator.run_calibration_sweep(
+        output=tmp_path,
+        provenance=context,
+        progress_callback=progress_events.append,
+    )
 
     assert result["status"] == "supported"
     assert len(calls) == 15
@@ -285,6 +299,10 @@ def test_standard_sweep_collects_idle_and_four_repeated_payloads(tmp_path, monke
     assert result["standard_sweep_validation"]["clean_standard_calibration"] is True
     assert len(list((tmp_path / "results/calibration-sweeps").glob("*/started.json"))) == 1
     assert len(list((tmp_path / "results/calibration-sweeps").glob("*/completed.json"))) == 1
+    assert progress_events[0]["stage"] == "sweep_started"
+    assert progress_events[-1]["stage"] == "sweep_completed"
+    assert sum(event["stage"] == "run_started" for event in progress_events) == 15
+    assert sum(event["stage"] == "run_completed" for event in progress_events) == 15
 
     with pytest.raises(ArtifactExistsError, match="completed calibration sweep"):
         orchestrator.run_calibration_sweep(output=tmp_path, provenance=context)
@@ -384,3 +402,43 @@ def test_sweep_is_allowed_in_a_new_output_directory(tmp_path, monkeypatch) -> No
         with pytest.raises(RuntimeError, match="stop after marker"):
             orchestrator.run_calibration_sweep(output=output, provenance=context)
         assert len(list((output / "results/calibration-sweeps").glob("*/started.json"))) == 1
+
+
+def test_different_context_cannot_append_sweep_to_same_output(tmp_path) -> None:
+    marker = tmp_path / "results/calibration-sweeps/previous/started.json"
+    marker.parent.mkdir(parents=True)
+    marker.write_text("{}\n", encoding="utf-8")
+    context = ProvenanceContext.create(corpus_id="corpus-new-context")
+
+    with pytest.raises(ArtifactExistsError, match="calibration sweep"):
+        orchestrator.run_calibration_sweep(output=tmp_path, provenance=context)
+
+
+def test_idle_pcie_observation_uses_common_measured_interval(tmp_path) -> None:
+    run_directory = tmp_path / "run"
+    run_directory.mkdir()
+    intervals = ((100, 200), (110, 190))
+    for rank, (start, end) in enumerate(intervals):
+        event = {
+            "event": "measurement_interval",
+            "monotonic_ns": end,
+            "details": {
+                "measurement_start_monotonic_ns": start,
+                "measurement_end_monotonic_ns": end,
+            },
+        }
+        (run_directory / f"rank-{rank}.events.jsonl").write_text(
+            json.dumps(event) + "\n", encoding="utf-8"
+        )
+    samples = [
+        _pcie_sample(90, 1000.0),
+        _pcie_sample(120, 10.0),
+        _pcie_sample(180, 20.0),
+        _pcie_sample(210, 1000.0),
+    ]
+
+    result = orchestrator._pcie_observation(samples, run_directory)
+
+    assert result["measurement_phase_bounded"] is True
+    assert result["pcie_sample_count"] == 2
+    assert result["pcie_total_mean_bytes_per_s"] == 30.0

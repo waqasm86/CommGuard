@@ -38,6 +38,21 @@ current-session calibration. Later notebooks consume the exact matrix,
 extraction, calibration, and evaluation paths printed by their predecessor;
 they never choose a calibration by filename order.
 
+After the editable install, every canonical notebook prepends the reviewed
+checkout's `src/` directory to both `sys.path` and `PYTHONPATH`, invalidates
+import caches, removes stale `commguard` modules, and verifies
+`commguard.__file__` is under that checkout. This is required because an
+already-running Kaggle kernel need not observe an editable install immediately;
+`PYTHONPATH` also binds spawned `torchrun` workers to the same source.
+
+Calibration creates one unique artifact directory per `NOTEBOOK_RUN_ID` before
+strict preflight and refuses directory reuse. The SDK then writes create-only
+sweep start/completion markers. Re-running the calibration cell against the
+same context is an error; partial evidence is retained and a new attempt needs a
+new notebook run ID and workspace. Export uses a unique archive name, refuses
+overwrite, and preserves a structurally complete but `not_supported` result as
+diagnostic evidence before telling the operator not to continue to benign work.
+
 ## Executed evidence
 
 Executed notebooks are evidence/release artifacts, not editable source. They

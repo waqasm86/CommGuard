@@ -66,17 +66,16 @@ def test_injected_rank_crash_preserves_failure_artifacts(tmp_path) -> None:
     assert not manifest["participation_valid"]
 
 
-def test_malformed_collective_is_recorded(tmp_path) -> None:
+def test_malformed_collective_is_rejected_before_launch(tmp_path) -> None:
     require_dual_t4()
-    outcome = run_experiment(
-        "collective_all_reduce_1mib",
-        output=tmp_path,
-        overrides={"collective": "not_a_collective"},
-        timeout_s=60,
-        raise_on_failure=False,
-    )
-    assert outcome["manifest"]["exit_status"] == "failed"
-    assert outcome["manifest"]["failure_reason"]
+    with pytest.raises(ValueError, match="unsupported calibration collective"):
+        run_experiment(
+            "collective_all_reduce_1mib",
+            output=tmp_path,
+            overrides={"collective": "not_a_collective"},
+            timeout_s=60,
+            raise_on_failure=False,
+        )
 
 
 def test_timeout_terminates_process_tree(tmp_path) -> None:

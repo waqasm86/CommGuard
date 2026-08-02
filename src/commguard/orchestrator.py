@@ -8,6 +8,7 @@ import random
 import statistics
 import time
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -78,6 +79,7 @@ def _failure_category(result: LaunchResult) -> tuple[str | None, str | None]:
 def _pcie_observation(samples: list[Any], run_directory: Path) -> dict[str, Any]:
     phase_start: int | None = None
     phase_end: int | None = None
+    idle_intervals: list[tuple[int, int]] = []
     for rank in (0, 1):
         event_path = run_directory / f"rank-{rank}.events.jsonl"
         if not event_path.exists():
@@ -90,6 +92,19 @@ def _pcie_observation(samples: list[Any], run_directory: Path) -> dict[str, Any]
             elif event.get("event") == "collective_complete":
                 timestamp = int(event["monotonic_ns"])
                 phase_end = timestamp if phase_end is None else max(phase_end, timestamp)
+            elif event.get("event") == "measurement_interval":
+                details = event.get("details", {})
+                start = int(details["measurement_start_monotonic_ns"])
+                end = int(details["measurement_end_monotonic_ns"])
+                if start <= end:
+                    idle_intervals.append((start, end))
+    if phase_start is None and phase_end is None and idle_intervals:
+        # Use the interval common to both ranks. This excludes setup/teardown
+        # synchronization traffic from an idle baseline observation.
+        idle_start = max(interval[0] for interval in idle_intervals)
+        idle_end = min(interval[1] for interval in idle_intervals)
+        if idle_start <= idle_end:
+            phase_start, phase_end = idle_start, idle_end
     measured_samples = (
         [sample for sample in samples if phase_start <= sample.monotonic_ns <= phase_end]
         if phase_start is not None and phase_end is not None
@@ -376,6 +391,8 @@ def run_calibration_sweep(
     repetitions: int = STANDARD_CALIBRATION_REPETITIONS,
     timeout_s: float = 180.0,
     provenance: ProvenanceContext | None = None,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    allow_prior_sweep_evidence: bool = False,
 ) -> dict[str, Any]:
     if repetitions < 1:
         raise ValueError("calibration repetitions must be at least one")
@@ -383,7 +400,6 @@ def run_calibration_sweep(
         raise ValueError("calibration payloads must be positive")
     if len(payload_mib) != len(set(payload_mib)):
         raise ValueError("calibration payloads must be unique")
-    supplied_provenance = provenance is not None
     context = provenance or ProvenanceContext.create(corpus_id=new_corpus_id("calibration"))
     store = ArtifactStore(output)
     store.initialize()
@@ -392,7 +408,7 @@ def run_calibration_sweep(
     started_marker = store.resolve(marker_prefix / "started.json")
     current_markers = [started_marker] if started_marker.exists() else []
     existing_markers = sorted(store.resolve("results/calibration-sweeps").glob("*/started.json"))
-    if current_markers or (existing_markers and not supplied_provenance):
+    if current_markers or (existing_markers and not allow_prior_sweep_evidence):
         marker = current_markers[0] if current_markers else existing_markers[0]
         completed = marker.with_name("completed.json").is_file()
         state = "completed" if completed else "partial or in-progress"
@@ -432,6 +448,12 @@ def run_calibration_sweep(
     )
     observations: list[dict[str, Any]] = []
 
+    def progress(stage: str, **details: Any) -> None:
+        if progress_callback is not None:
+            progress_callback({"stage": stage, "sweep_id": sweep_id, **details})
+
+    progress("sweep_started", planned_run_count=len(expected_matrix))
+
     def observe(outcome: dict[str, Any], **identity: Any) -> dict[str, Any]:
         return {
             "run_id": outcome["run_id"],
@@ -448,6 +470,12 @@ def run_calibration_sweep(
         }
 
     for repetition in range(repetitions):
+        progress(
+            "run_started",
+            observation_type="idle_baseline",
+            workload_name="calibration_idle",
+            repetition=repetition,
+        )
         idle_outcome = run_experiment(
             "calibration_idle",
             output=output,
@@ -467,8 +495,23 @@ def run_calibration_sweep(
                 repetition=repetition,
             )
         )
+        progress(
+            "run_completed",
+            observation_type="idle_baseline",
+            workload_name="calibration_idle",
+            repetition=repetition,
+            run_id=idle_outcome["run_id"],
+            exit_status=idle_outcome["manifest"]["exit_status"],
+        )
         for payload in payload_mib:
             workload_name = calibration_workload_name(collective, payload)
+            progress(
+                "run_started",
+                observation_type="collective",
+                workload_name=workload_name,
+                payload_mib=payload,
+                repetition=repetition,
+            )
             outcome = run_experiment(
                 workload_name,
                 output=output,
@@ -491,6 +534,15 @@ def run_calibration_sweep(
                     collective=collective,
                     repetition=repetition,
                 )
+            )
+            progress(
+                "run_completed",
+                observation_type="collective",
+                workload_name=workload_name,
+                payload_mib=payload,
+                repetition=repetition,
+                run_id=outcome["run_id"],
+                exit_status=outcome["manifest"]["exit_status"],
             )
     result = analyze_calibration(
         observations,
@@ -536,6 +588,11 @@ def run_calibration_sweep(
             "clean_standard_calibration": validation["clean_standard_calibration"],
             "completed_at_utc": datetime.now(timezone.utc).isoformat(),
         },
+    )
+    progress(
+        "sweep_completed",
+        calibration_status=result["status"],
+        clean_standard_calibration=validation["clean_standard_calibration"],
     )
     return result
 
@@ -966,6 +1023,7 @@ def run_matrix(
         output=output,
         timeout_s=timeout_s,
         provenance=context,
+        allow_prior_sweep_evidence=prior_calibration_reference is not None,
     )
     calibration_reference = dict(calibration["reference"])
     verify_calibration_reference(

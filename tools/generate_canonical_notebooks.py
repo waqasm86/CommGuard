@@ -33,7 +33,9 @@ def code(identifier: str, source: str) -> dict[str, object]:
 
 
 def source_setup(version: str) -> str:
-    return f'''from pathlib import Path
+    return f'''import importlib
+import os
+from pathlib import Path
 import re
 import subprocess
 import sys
@@ -86,7 +88,31 @@ subprocess.run(
     ],
     check=True,
 )
-print({{"reviewed_commit": head, "remote_refs": pushed_refs.splitlines()}})
+SOURCE_ROOT = (REPOSITORY / "src").resolve()
+existing_pythonpath = os.environ.get("PYTHONPATH", "")
+os.environ["PYTHONPATH"] = str(SOURCE_ROOT) + (
+    os.pathsep + existing_pythonpath if existing_pythonpath else ""
+)
+sys.path[:] = [entry for entry in sys.path if Path(entry or ".").resolve() != SOURCE_ROOT]
+sys.path.insert(0, str(SOURCE_ROOT))
+importlib.invalidate_caches()
+for module_name in [
+    name for name in sys.modules if name == "commguard" or name.startswith("commguard.")
+]:
+    del sys.modules[module_name]
+import commguard
+
+commguard_path = Path(commguard.__file__).resolve()
+try:
+    commguard_path.relative_to(SOURCE_ROOT)
+except ValueError as exc:
+    raise RuntimeError(f"CommGuard imported outside reviewed source: {{commguard_path}}") from exc
+print({{
+    "reviewed_commit": head,
+    "remote_refs": pushed_refs.splitlines(),
+    "commguard_import": str(commguard_path.relative_to(REPOSITORY)),
+    "torchrun_pythonpath_prefix": os.environ["PYTHONPATH"].split(os.pathsep)[0],
+}})
 '''
 
 
@@ -110,14 +136,27 @@ print({{"restored_archive": str(INPUT_ARCHIVE), "sha256": actual_input_sha256}})
 """
 
 
-def context_cell(version: str, corpus_prefix: str, with_input: bool) -> str:
+def context_cell(
+    version: str,
+    corpus_prefix: str,
+    with_input: bool,
+    *,
+    run_id_predefined: bool = False,
+) -> str:
     input_hash = "EXPECTED_INPUT_SHA256" if with_input else "None"
-    return f'''from datetime import datetime, timezone
+    run_id_setup = (
+        ""
+        if run_id_predefined
+        else """from datetime import datetime, timezone
+
+NOTEBOOK_RUN_ID = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+"""
+    )
+    return f'''{run_id_setup}
 
 from commguard.environment.preflight import check_environment, summarize_environment
 from commguard.provenance import ProvenanceContext
 
-NOTEBOOK_RUN_ID = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
 CONTEXT = ProvenanceContext.create(
     corpus_id=f"corpus-{corpus_prefix}-{{NOTEBOOK_RUN_ID}}",
     experiment_session_id=f"session-{corpus_prefix}-{{NOTEBOOK_RUN_ID}}",
@@ -170,13 +209,94 @@ def calibration_notebook() -> list[dict[str, object]]:
         ),
         code("cal-source", source_setup("commguard_calibration_v3")),
         code(
-            "cal-paths",
-            """ARTIFACTS = Path("/kaggle/working/commguard-artifacts")
-if ARTIFACTS.exists():
-    raise RuntimeError(f"Refusing to overwrite prior artifacts: {ARTIFACTS}")
+            "cal-hardware",
+            """import shutil
+
+if shutil.which("nvidia-smi") is None:
+    raise RuntimeError("nvidia-smi is required for the strict dual-T4 calibration.")
+gpu_query = subprocess.run(
+    [
+        "nvidia-smi",
+        "--query-gpu=index,name,memory.total,compute_cap",
+        "--format=csv,noheader,nounits",
+    ],
+    check=True,
+    capture_output=True,
+    text=True,
+)
+GPU_SUMMARY = []
+for line in gpu_query.stdout.splitlines():
+    index, name, memory_mib, compute_capability = [part.strip() for part in line.split(",")]
+    GPU_SUMMARY.append({
+        "index": int(index),
+        "name": name,
+        "memory_total_mib": int(memory_mib),
+        "compute_capability": compute_capability,
+    })
+if len(GPU_SUMMARY) != 2 or any("T4" not in gpu["name"] for gpu in GPU_SUMMARY):
+    raise RuntimeError(f"Expected exactly two Tesla T4 GPUs, observed: {GPU_SUMMARY}")
+import torch
+
+if not torch.cuda.is_available() or torch.cuda.device_count() != 2:
+    raise RuntimeError("PyTorch must expose exactly two CUDA devices.")
+if not torch.distributed.is_nccl_available():
+    raise RuntimeError("The reviewed PyTorch build does not expose NCCL.")
+print({
+    "gpus": GPU_SUMMARY,
+    "torch_version": torch.__version__,
+    "cuda_version": torch.version.cuda,
+    "nccl_available": torch.distributed.is_nccl_available(),
+})
 """,
         ),
-        code("cal-context", context_cell("commguard_calibration_v3", "calibration-v3", False)),
+        code(
+            "cal-workspace",
+            """from datetime import datetime, timezone
+
+NOTEBOOK_RUN_ID = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+ARTIFACTS = Path(f"/kaggle/working/commguard-calibration-v3-{NOTEBOOK_RUN_ID}")
+if ARTIFACTS.exists():
+    raise RuntimeError(
+        f"Refusing reused calibration workspace {ARTIFACTS}; create a new NOTEBOOK_RUN_ID."
+    )
+ARTIFACTS.mkdir(parents=True, exist_ok=False)
+write_probe = ARTIFACTS / ".write-probe"
+with write_probe.open("x", encoding="utf-8") as stream:
+    stream.write("writable\\n")
+write_probe.unlink()
+print({"notebook_run_id": NOTEBOOK_RUN_ID, "artifact_workspace": ARTIFACTS.name})
+""",
+        ),
+        code(
+            "cal-bootstrap",
+            """from commguard.artifacts import ArtifactStore
+from commguard.schemas import CURRENT_SCHEMA_VERSION, SCHEMA_VERSION
+
+ArtifactStore(ARTIFACTS).initialize()
+BOOTSTRAP = {
+    "artifact_kind": "experiment_summary",
+    "schema_version": SCHEMA_VERSION,
+    "summary_type": "notebook_bootstrap",
+    "notebook_version": NOTEBOOK_VERSION,
+    "notebook_run_id": NOTEBOOK_RUN_ID,
+    "reviewed_commit": REVIEWED_COMMIT,
+    "source_repository": "commguard-source",
+    "gpu_summary": GPU_SUMMARY,
+    "artifact_schema_version": CURRENT_SCHEMA_VERSION,
+}
+ArtifactStore(ARTIFACTS).write_json("environment/notebook-bootstrap.json", BOOTSTRAP)
+print(BOOTSTRAP)
+""",
+        ),
+        code(
+            "cal-context",
+            context_cell(
+                "commguard_calibration_v3",
+                "calibration-v3",
+                False,
+                run_id_predefined=True,
+            ),
+        ),
         code(
             "cal-run",
             """from commguard.orchestrator import run_calibration_sweep
@@ -184,18 +304,27 @@ if ARTIFACTS.exists():
 RUN_STANDARD_CALIBRATION = True
 if not RUN_STANDARD_CALIBRATION:
     raise RuntimeError("Enable the bounded standard calibration before export.")
+print({
+    "starting_standard_calibration": True,
+    "idle_repetitions": 3,
+    "collective": "all_reduce",
+    "payload_mib": [1, 4, 16, 64],
+    "total_runs": 15,
+})
 CALIBRATION = run_calibration_sweep(
     output=ARTIFACTS,
     payload_mib=(1, 4, 16, 64),
     repetitions=3,
     timeout_s=180.0,
     provenance=CONTEXT,
+    progress_callback=lambda event: print({"calibration_progress": event}),
 )
 print({
     "status": CALIBRATION["status"],
     "decision_state": CALIBRATION["decision_state"],
     "idle_usable_repetitions": CALIBRATION["idle_baseline_usable_repetitions"],
     "payload_summaries": CALIBRATION["payload_summaries"],
+    "standard_sweep_validation": CALIBRATION["standard_sweep_validation"],
     "exact_calibration_reference_for_next_notebook": CALIBRATION["reference"],
 })
 """,
@@ -207,7 +336,33 @@ print({
         ),
         code(
             "cal-export",
-            export_cell("commguard-calibration-v3", "commguard_benign_corpus_v2.ipynb"),
+            """from commguard.artifacts import ArtifactStore, sha256_file
+
+ARCHIVE = Path(f"/kaggle/working/commguard-calibration-v3-{NOTEBOOK_RUN_ID}.tar.gz")
+ArtifactStore(ARTIFACTS).export(ARCHIVE)
+ARCHIVE_SHA256 = sha256_file(ARCHIVE)
+SHA_FILE = ARCHIVE.with_suffix(ARCHIVE.suffix + ".sha256")
+with SHA_FILE.open("x", encoding="utf-8") as stream:
+    stream.write(f"{ARCHIVE_SHA256}  {ARCHIVE.name}\\n")
+print({
+    "archive": str(ARCHIVE),
+    "archive_sha256": ARCHIVE_SHA256,
+    "sha256_file": str(SHA_FILE),
+    "calibration_status": CALIBRATION["status"],
+    "calibration_artifact_reference": CALIBRATION["reference"],
+})
+if CALIBRATION["status"] != "supported" or not CALIBRATION["modern_capture_gate_passed"]:
+    print("FAILED/INCONCLUSIVE EVIDENCE WAS PRESERVED. Do not run the benign notebook.")
+    raise RuntimeError(
+        "Modern idle-aware calibration is not supported; download the diagnostic archive "
+        "and SHA-256 file, then investigate before creating a fresh NOTEBOOK_RUN_ID."
+    )
+print(f"NEXT STEP: add {ARCHIVE} to a private Kaggle dataset without renaming it.")
+print(
+    "NEXT STEP: copy the exact archive SHA-256 and calibration artifact reference into "
+    "commguard_benign_corpus_v2.ipynb."
+)
+""",
         ),
     ]
 
