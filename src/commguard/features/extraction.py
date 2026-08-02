@@ -1,23 +1,43 @@
-"""Deterministic temporal and cross-GPU feature extraction."""
+"""Deterministic temporal features with explicit corpus coverage diagnostics."""
 
 from __future__ import annotations
 
 import math
 import statistics
-from collections import defaultdict
-from collections.abc import Iterable, Sequence
-from datetime import datetime
+from collections import Counter, defaultdict
+from collections.abc import Iterable, Mapping, Sequence
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from commguard.artifacts import ArtifactStore
-from commguard.schemas import SCHEMA_VERSION, TELEMETRY_FIELDS, load_artifact
+from commguard.corpus import CorpusManifest, PlannedRun
+from commguard.exceptions import ValidationError
+from commguard.features.coverage import (
+    DEFAULT_WINDOW_SECONDS,
+    CoverageReason,
+    CoverageRecord,
+    ExtractionResult,
+)
+from commguard.schemas import (
+    CURRENT_SCHEMA_VERSION,
+    LEGACY_SCHEMA_VERSION,
+    TELEMETRY_FIELDS,
+    load_artifact,
+)
 
 METADATA_COLUMNS = {
     "artifact_kind",
     "schema_version",
     "run_id",
+    "plan_id",
+    "experiment_session_id",
+    "collection_id",
+    "corpus_id",
+    "node_id",
+    "environment_fingerprint",
     "session_fingerprint",
+    "legacy_grouping_ambiguous",
     "target_label",
     "workload_family",
     "designation",
@@ -28,6 +48,8 @@ METADATA_COLUMNS = {
     "startup_excluded",
     "sample_count_gpu0",
     "sample_count_gpu1",
+    "aligned_sample_pairs",
+    "alignment_max_delta_seconds",
 }
 
 
@@ -45,11 +67,8 @@ def _quantile(values: list[float], probability: float) -> float:
 
 
 def _correlation(left: list[float], right: list[float]) -> float | None:
-    count = min(len(left), len(right))
-    if count < 2:
+    if len(left) != len(right) or len(left) < 2:
         return None
-    left = left[:count]
-    right = right[:count]
     left_mean = statistics.fmean(left)
     right_mean = statistics.fmean(right)
     denominator = math.sqrt(
@@ -130,14 +149,85 @@ def _valid_values(samples: list[dict[str, Any]], field: str) -> tuple[list[float
     return values, times
 
 
+def _paired_fields(
+    samples: list[dict[str, Any]], left_field: str, right_field: str
+) -> tuple[list[float], list[float]]:
+    left: list[float] = []
+    right: list[float] = []
+    for sample in samples:
+        first = sample["fields"][left_field]
+        second = sample["fields"][right_field]
+        if (
+            first["supported"]
+            and second["supported"]
+            and first["value"] is not None
+            and second["value"] is not None
+        ):
+            left.append(float(first["value"]))
+            right.append(float(second["value"]))
+    return left, right
+
+
+def align_samples_by_timestamp(
+    left: Sequence[dict[str, Any]],
+    right: Sequence[dict[str, Any]],
+    *,
+    tolerance_seconds: float = 0.25,
+) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    """Pair timestamp-ordered samples without reuse inside a fixed tolerance."""
+    if tolerance_seconds < 0:
+        raise ValueError("tolerance_seconds cannot be negative")
+    tolerance_ns = int(tolerance_seconds * 1e9)
+    left_rows = sorted(left, key=lambda item: int(item["monotonic_ns"]))
+    right_rows = sorted(right, key=lambda item: int(item["monotonic_ns"]))
+    pairs: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    left_index = 0
+    right_index = 0
+    while left_index < len(left_rows) and right_index < len(right_rows):
+        left_ns = int(left_rows[left_index]["monotonic_ns"])
+        right_ns = int(right_rows[right_index]["monotonic_ns"])
+        delta = left_ns - right_ns
+        if abs(delta) <= tolerance_ns:
+            pairs.append((left_rows[left_index], right_rows[right_index]))
+            left_index += 1
+            right_index += 1
+        elif delta < 0:
+            left_index += 1
+        else:
+            right_index += 1
+    return pairs
+
+
+def _cross_field_values(
+    pairs: list[tuple[dict[str, Any], dict[str, Any]]], field: str
+) -> tuple[list[float], list[float]]:
+    left_values: list[float] = []
+    right_values: list[float] = []
+    for left, right in pairs:
+        left_reading = left["fields"][field]
+        right_reading = right["fields"][field]
+        if (
+            left_reading["supported"]
+            and right_reading["supported"]
+            and left_reading["value"] is not None
+            and right_reading["value"] is not None
+        ):
+            left_values.append(float(left_reading["value"]))
+            right_values.append(float(right_reading["value"]))
+    return left_values, right_values
+
+
 def _feature_window(
-    manifest: dict[str, Any],
+    manifest: Mapping[str, Any],
     samples_by_gpu: dict[int, list[dict[str, Any]]],
     window_seconds: float,
     window_index: int,
     window_start_ns: int,
     window_end_ns: int,
     startup_excluded: bool,
+    alignment_tolerance_seconds: float,
+    plan: PlannedRun | None = None,
+    corpus: CorpusManifest | None = None,
 ) -> dict[str, Any] | None:
     selected = {
         gpu: [
@@ -149,14 +239,42 @@ def _feature_window(
     }
     if set(selected) != {0, 1} or any(len(selected[gpu]) < 2 for gpu in (0, 1)):
         return None
+    aligned = align_samples_by_timestamp(
+        selected[0], selected[1], tolerance_seconds=alignment_tolerance_seconds
+    )
+    if len(aligned) < 2:
+        return None
+    alignment_deltas = [
+        abs(int(left["monotonic_ns"]) - int(right["monotonic_ns"])) / 1e9 for left, right in aligned
+    ]
+    environment_fingerprint = str(manifest.get("environment_fingerprint", ""))
+    has_explicit_provenance = plan is not None and corpus is not None
     row: dict[str, Any] = {
         "artifact_kind": "feature_row",
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": (
+            CURRENT_SCHEMA_VERSION if has_explicit_provenance else LEGACY_SCHEMA_VERSION
+        ),
         "run_id": manifest["run_id"],
-        "session_fingerprint": manifest["environment_fingerprint"],
-        "target_label": manifest["workload_label"],
-        "workload_family": manifest["workload_family"],
-        "designation": manifest["designation"],
+        "plan_id": plan.plan_id if plan is not None else None,
+        "experiment_session_id": (
+            manifest.get("experiment_session_id")
+            or (corpus.experiment_session_id if corpus is not None else None)
+        ),
+        "collection_id": manifest.get("collection_id")
+        or (corpus.collection_id if corpus is not None else None),
+        "corpus_id": manifest.get("corpus_id")
+        or (corpus.corpus_id if corpus is not None else None),
+        "node_id": manifest.get("node_id") or (corpus.node_id if corpus is not None else None),
+        "environment_fingerprint": environment_fingerprint,
+        "session_fingerprint": environment_fingerprint,
+        "legacy_grouping_ambiguous": bool(
+            manifest.get("legacy_grouping_ambiguous", not has_explicit_provenance)
+        ),
+        "target_label": plan.target_label if plan is not None else manifest["workload_label"],
+        "workload_family": (
+            plan.workload_family if plan is not None else manifest["workload_family"]
+        ),
+        "designation": plan.designation if plan is not None else manifest["designation"],
         "window_seconds": window_seconds,
         "window_index": window_index,
         "window_start_monotonic_ns": window_start_ns,
@@ -164,6 +282,8 @@ def _feature_window(
         "startup_excluded": startup_excluded,
         "sample_count_gpu0": len(selected[0]),
         "sample_count_gpu1": len(selected[1]),
+        "aligned_sample_pairs": len(aligned),
+        "alignment_max_delta_seconds": max(alignment_deltas),
     }
     values_by_gpu: dict[tuple[int, str], list[float]] = {}
     for gpu in (0, 1):
@@ -180,37 +300,30 @@ def _feature_window(
         row[f"gpu{gpu}__utilization_duty_cycle"] = (
             sum(value > 5 for value in utilization) / len(utilization) if utilization else None
         )
-        tx = values_by_gpu[(gpu, "pcie_tx_bytes_per_s")]
-        rx = values_by_gpu[(gpu, "pcie_rx_bytes_per_s")]
-        if tx and rx:
-            count = min(len(tx), len(rx))
-            row[f"gpu{gpu}__pcie_total_mean_bytes_per_s"] = (
-                statistics.fmean(tx[:count] + rx[:count]) * 2
+        tx, rx = _paired_fields(selected[gpu], "pcie_tx_bytes_per_s", "pcie_rx_bytes_per_s")
+        if tx:
+            row[f"gpu{gpu}__pcie_total_mean_bytes_per_s"] = statistics.fmean(
+                first + second for first, second in zip(tx, rx, strict=True)
             )
-            rx_mean = statistics.fmean(rx[:count])
-            row[f"gpu{gpu}__pcie_tx_rx_ratio"] = (
-                statistics.fmean(tx[:count]) / rx_mean if rx_mean else None
-            )
+            rx_mean = statistics.fmean(rx)
+            row[f"gpu{gpu}__pcie_tx_rx_ratio"] = statistics.fmean(tx) / rx_mean if rx_mean else None
         else:
             row[f"gpu{gpu}__pcie_total_mean_bytes_per_s"] = None
             row[f"gpu{gpu}__pcie_tx_rx_ratio"] = None
     for field in TELEMETRY_FIELDS:
-        left = values_by_gpu[(0, field)]
-        right = values_by_gpu[(1, field)]
-        count = min(len(left), len(right))
-        if count:
-            left = left[:count]
-            right = right[:count]
-            row[f"cross_gpu__{field}__mean_abs_difference"] = statistics.fmean(
-                abs(a - b) for a, b in zip(left, right, strict=True)
+        left, right = _cross_field_values(aligned, field)
+        if left:
+            difference = statistics.fmean(
+                abs(first - second) for first, second in zip(left, right, strict=True)
             )
-            scale = statistics.fmean([abs(value) for value in left + right])
+            row[f"cross_gpu__{field}__mean_abs_difference"] = difference
+            scale = statistics.fmean(abs(value) for value in left + right)
             row[f"cross_gpu__{field}__normalized_divergence"] = (
-                row[f"cross_gpu__{field}__mean_abs_difference"] / scale if scale else None
+                difference / scale if scale else None
             )
             row[f"cross_gpu__{field}__correlation"] = _correlation(left, right)
             row[f"cross_gpu__{field}__lag1_correlation"] = (
-                _correlation(left[:-1], right[1:]) if count > 2 else None
+                _correlation(left[:-1], right[1:]) if len(left) > 2 else None
             )
         else:
             row[f"cross_gpu__{field}__mean_abs_difference"] = None
@@ -223,12 +336,18 @@ def _feature_window(
 def extract_run_features(
     manifest: dict[str, Any],
     samples: Sequence[dict[str, Any]],
-    window_lengths: Sequence[float] = (5.0, 15.0, 30.0),
+    window_lengths: Sequence[float] = DEFAULT_WINDOW_SECONDS,
     stride_fraction: float = 0.5,
     exclude_startup: bool = True,
+    alignment_tolerance_seconds: float = 0.25,
+    *,
+    plan: PlannedRun | None = None,
+    corpus: CorpusManifest | None = None,
 ) -> list[dict[str, Any]]:
     if not 0 < stride_fraction <= 1:
         raise ValueError("stride_fraction must be in (0, 1]")
+    if not window_lengths or any(float(value) <= 0 for value in window_lengths):
+        raise ValueError("window lengths must be positive")
     by_gpu: dict[int, list[dict[str, Any]]] = defaultdict(list)
     for sample in samples:
         by_gpu[int(sample["gpu_index"])].append(sample)
@@ -236,13 +355,22 @@ def extract_run_features(
         return []
     for records in by_gpu.values():
         records.sort(key=lambda item: int(item["monotonic_ns"]))
-    start_ns = max(int(by_gpu[gpu][0]["monotonic_ns"]) for gpu in (0, 1))
-    end_ns = min(int(by_gpu[gpu][-1]["monotonic_ns"]) for gpu in (0, 1)) + 1
+    common_start_ns = max(int(by_gpu[gpu][0]["monotonic_ns"]) for gpu in (0, 1))
+    common_end_ns = min(int(by_gpu[gpu][-1]["monotonic_ns"]) for gpu in (0, 1)) + 1
+    start_ns = common_start_ns
+    end_ns = common_end_ns
     if exclude_startup:
-        start_ns += int(float(manifest.get("warmup_seconds", 0.0)) * 1e9)
+        measured_start = manifest.get("measurement_start_monotonic_ns")
+        measured_end = manifest.get("measurement_end_monotonic_ns")
+        if measured_start is not None:
+            start_ns = max(start_ns, int(measured_start))
+        else:
+            start_ns += int(float(manifest.get("warmup_seconds", 0.0)) * 1e9)
+        if measured_end is not None:
+            end_ns = min(end_ns, int(measured_end) + 1)
     rows: list[dict[str, Any]] = []
     for window_seconds in window_lengths:
-        window_ns = int(window_seconds * 1e9)
+        window_ns = int(float(window_seconds) * 1e9)
         stride_ns = max(1, int(window_ns * stride_fraction))
         window_start = start_ns
         index = 0
@@ -255,6 +383,9 @@ def extract_run_features(
                 window_start,
                 window_start + window_ns,
                 exclude_startup,
+                alignment_tolerance_seconds,
+                plan,
+                corpus,
             )
             if row is not None:
                 rows.append(row)
@@ -263,51 +394,505 @@ def extract_run_features(
     return rows
 
 
-def extract_features(
-    input_root: str | Path = "artifacts",
+def _load_corpus_manifest(
+    manifest: CorpusManifest | Mapping[str, Any] | str | Path,
+) -> CorpusManifest:
+    if isinstance(manifest, CorpusManifest):
+        manifest.validate()
+        return manifest
+    if isinstance(manifest, Mapping):
+        result = CorpusManifest.from_dict(manifest)
+        result.validate()
+        return result
+    loaded = load_artifact(manifest)
+    if not isinstance(loaded, dict):
+        raise ValidationError("corpus manifest must be a JSON object")
+    return CorpusManifest.from_dict(loaded)
+
+
+def _excluded_record(
+    corpus: CorpusManifest,
+    plan: PlannedRun,
+    windows: tuple[float, ...],
+    tolerance: float,
+    reason: CoverageReason,
+    detail: str,
+    *,
+    manifest: Mapping[str, Any] | None = None,
+    rows_per_gpu: dict[str, int] | None = None,
+    common_start_ns: int | None = None,
+    common_end_ns: int | None = None,
+    overlap_seconds: float = 0.0,
+    usable_seconds: float = 0.0,
+    aligned_pairs: int = 0,
+    sampling_gaps: dict[str, dict[str, float | int | None]] | None = None,
+) -> CoverageRecord:
+    return CoverageRecord(
+        plan_id=plan.plan_id,
+        run_id=plan.accepted_run_id,
+        workload_family=plan.workload_family,
+        target_label=plan.target_label,
+        designation=plan.designation,
+        experiment_session_id=corpus.experiment_session_id,
+        collection_id=corpus.collection_id,
+        corpus_id=corpus.corpus_id,
+        node_id=corpus.node_id,
+        status="excluded",
+        reason_code=reason.value,
+        detail=detail,
+        started_at_utc=str(manifest.get("started_at_utc")) if manifest else None,
+        ended_at_utc=str(manifest.get("ended_at_utc")) if manifest else None,
+        rows_per_gpu=rows_per_gpu or {"0": 0, "1": 0},
+        common_start_monotonic_ns=common_start_ns,
+        common_end_monotonic_ns=common_end_ns,
+        common_overlap_seconds=overlap_seconds,
+        configured_warmup_seconds=float(manifest.get("warmup_seconds", 0.0)) if manifest else 0.0,
+        usable_duration_seconds=usable_seconds,
+        requested_window_seconds=windows,
+        emitted_windows={f"{window:g}": 0 for window in windows},
+        sampling_gap_seconds_by_gpu=sampling_gaps or _empty_sampling_gap_stats(),
+        alignment_tolerance_seconds=tolerance,
+        aligned_sample_pairs=aligned_pairs,
+        legacy_grouping_ambiguous=bool(
+            manifest.get("legacy_grouping_ambiguous", False) if manifest else False
+        ),
+    )
+
+
+def _empty_sampling_gap_stats() -> dict[str, dict[str, float | int | None]]:
+    return {
+        str(gpu): {
+            "interval_count": 0,
+            "minimum": None,
+            "median": None,
+            "p95": None,
+            "maximum": None,
+        }
+        for gpu in (0, 1)
+    }
+
+
+def _sampling_gap_stats(
+    samples_by_gpu: Mapping[int, Sequence[Mapping[str, Any]]],
+) -> dict[str, dict[str, float | int | None]]:
+    result = _empty_sampling_gap_stats()
+    for gpu in (0, 1):
+        timestamps = sorted(int(sample["monotonic_ns"]) for sample in samples_by_gpu.get(gpu, ()))
+        gaps = [
+            (right - left) / 1e9 for left, right in zip(timestamps, timestamps[1:], strict=False)
+        ]
+        if gaps:
+            result[str(gpu)] = {
+                "interval_count": len(gaps),
+                "minimum": min(gaps),
+                "median": statistics.median(gaps),
+                "p95": _quantile(gaps, 0.95),
+                "maximum": max(gaps),
+            }
+    return result
+
+
+def _extract_planned_run(
+    root: Path,
+    corpus: CorpusManifest,
+    plan: PlannedRun,
+    windows: tuple[float, ...],
+    stride_fraction: float,
+    exclude_startup: bool,
+    tolerance: float,
+    selected_designation: str,
+) -> tuple[list[dict[str, Any]], CoverageRecord]:
+    if plan.accepted_run_id is None:
+        return [], _excluded_record(
+            corpus,
+            plan,
+            windows,
+            tolerance,
+            CoverageReason.INCOMPLETE_RUN,
+            f"corpus={corpus.corpus_id} plan={plan.plan_id} has no accepted run ID",
+        )
+    if plan.designation != selected_designation:
+        reason = (
+            CoverageReason.CALIBRATION_RUN_EXCLUDED
+            if plan.designation == "calibration"
+            else CoverageReason.NOT_IN_SELECTED_CORPUS
+        )
+        return [], _excluded_record(
+            corpus,
+            plan,
+            windows,
+            tolerance,
+            reason,
+            f"run={plan.accepted_run_id} designation={plan.designation} is not "
+            f"selected designation={selected_designation}",
+        )
+    if not corpus.allows(plan.accepted_run_id, selected_designation):
+        return [], _excluded_record(
+            corpus,
+            plan,
+            windows,
+            tolerance,
+            CoverageReason.NOT_IN_SELECTED_CORPUS,
+            f"run={plan.accepted_run_id} is not in the exact corpus/designation allow-list",
+        )
+
+    manifest_path = root / "runs" / plan.accepted_run_id / "manifest.json"
+    if not manifest_path.is_file():
+        return [], _excluded_record(
+            corpus,
+            plan,
+            windows,
+            tolerance,
+            CoverageReason.INCOMPLETE_RUN,
+            f"run={plan.accepted_run_id} manifest is missing at {manifest_path}",
+        )
+    try:
+        loaded_manifest = load_artifact(manifest_path, migrate_legacy=True)
+        assert isinstance(loaded_manifest, dict)
+        manifest = loaded_manifest
+    except Exception as exc:
+        return [], _excluded_record(
+            corpus,
+            plan,
+            windows,
+            tolerance,
+            CoverageReason.INVALID_MANIFEST,
+            f"run={plan.accepted_run_id} manifest error: {type(exc).__name__}: {exc}",
+        )
+    if manifest.get("corpus_id") not in {None, corpus.corpus_id}:
+        return [], _excluded_record(
+            corpus,
+            plan,
+            windows,
+            tolerance,
+            CoverageReason.NOT_IN_SELECTED_CORPUS,
+            f"run={plan.accepted_run_id} manifest corpus={manifest.get('corpus_id')} does not "
+            f"match selected corpus={corpus.corpus_id}",
+            manifest=manifest,
+        )
+    if manifest.get("exit_status") != "completed":
+        return [], _excluded_record(
+            corpus,
+            plan,
+            windows,
+            tolerance,
+            CoverageReason.INCOMPLETE_RUN,
+            f"run={plan.accepted_run_id} exit_status={manifest.get('exit_status')}",
+            manifest=manifest,
+        )
+    if not manifest.get("participation_valid"):
+        return [], _excluded_record(
+            corpus,
+            plan,
+            windows,
+            tolerance,
+            CoverageReason.PARTICIPATION_INVALID,
+            f"run={plan.accepted_run_id} failed two-rank participation validation",
+            manifest=manifest,
+        )
+    if (
+        str(manifest.get("workload_family")) != plan.workload_family
+        or str(manifest.get("workload_label")) != plan.target_label
+    ):
+        return [], _excluded_record(
+            corpus,
+            plan,
+            windows,
+            tolerance,
+            CoverageReason.INVALID_MANIFEST,
+            f"run={plan.accepted_run_id} family/label does not match plan={plan.plan_id}",
+            manifest=manifest,
+        )
+
+    telemetry_path = manifest_path.parent / "telemetry.jsonl"
+    if not telemetry_path.is_file():
+        return [], _excluded_record(
+            corpus,
+            plan,
+            windows,
+            tolerance,
+            CoverageReason.MISSING_TELEMETRY,
+            f"run={plan.accepted_run_id} telemetry is missing",
+            manifest=manifest,
+        )
+    try:
+        loaded_samples = load_artifact(telemetry_path, migrate_legacy=True)
+        assert isinstance(loaded_samples, list)
+        samples = loaded_samples
+    except ValidationError as exc:
+        reason = (
+            CoverageReason.UNSUPPORTED_TELEMETRY_SCHEMA
+            if "unsupported version" in str(exc)
+            else CoverageReason.FEATURE_ERROR
+        )
+        return [], _excluded_record(
+            corpus,
+            plan,
+            windows,
+            tolerance,
+            reason,
+            f"run={plan.accepted_run_id} telemetry error: {exc}",
+            manifest=manifest,
+        )
+
+    samples_by_gpu: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for sample in samples:
+        samples_by_gpu[int(sample["gpu_index"])].append(sample)
+    rows_per_gpu = {str(gpu): len(samples_by_gpu.get(gpu, [])) for gpu in (0, 1)}
+    for values in samples_by_gpu.values():
+        values.sort(key=lambda item: int(item["monotonic_ns"]))
+    sampling_gaps = _sampling_gap_stats(samples_by_gpu)
+    if set(samples_by_gpu) != {0, 1} or any(not samples_by_gpu[gpu] for gpu in (0, 1)):
+        return [], _excluded_record(
+            corpus,
+            plan,
+            windows,
+            tolerance,
+            CoverageReason.MISSING_REQUIRED_GPU,
+            f"run={plan.accepted_run_id} telemetry GPU indices={sorted(samples_by_gpu)}; "
+            "required=[0, 1]",
+            manifest=manifest,
+            rows_per_gpu=rows_per_gpu,
+            sampling_gaps=sampling_gaps,
+        )
+    common_start_ns = max(int(samples_by_gpu[gpu][0]["monotonic_ns"]) for gpu in (0, 1))
+    common_end_ns = min(int(samples_by_gpu[gpu][-1]["monotonic_ns"]) for gpu in (0, 1))
+    if common_end_ns <= common_start_ns:
+        return [], _excluded_record(
+            corpus,
+            plan,
+            windows,
+            tolerance,
+            CoverageReason.NO_COMMON_INTERVAL,
+            f"run={plan.accepted_run_id} has no common GPU telemetry interval",
+            manifest=manifest,
+            rows_per_gpu=rows_per_gpu,
+            common_start_ns=common_start_ns,
+            common_end_ns=common_end_ns,
+            sampling_gaps=sampling_gaps,
+        )
+    overlap_seconds = (common_end_ns - common_start_ns) / 1e9
+    warmup = float(manifest.get("warmup_seconds", 0.0)) if exclude_startup else 0.0
+    usable_start_ns = common_start_ns
+    usable_end_ns = common_end_ns
+    if exclude_startup:
+        measured_start = manifest.get("measurement_start_monotonic_ns")
+        measured_end = manifest.get("measurement_end_monotonic_ns")
+        if measured_start is not None:
+            usable_start_ns = max(usable_start_ns, int(measured_start))
+        else:
+            usable_start_ns += int(warmup * 1e9)
+        if measured_end is not None:
+            usable_end_ns = min(usable_end_ns, int(measured_end))
+    usable_seconds = max(0.0, (usable_end_ns - usable_start_ns) / 1e9)
+    if usable_seconds < min(windows):
+        return [], _excluded_record(
+            corpus,
+            plan,
+            windows,
+            tolerance,
+            CoverageReason.POST_WARMUP_INTERVAL_TOO_SHORT,
+            f"run={plan.accepted_run_id} family={plan.workload_family} "
+            f"overlap={overlap_seconds:.6f}s "
+            f"warmup={warmup:.6f}s usable={usable_seconds:.6f}s minimum_window={min(windows):g}s",
+            manifest=manifest,
+            rows_per_gpu=rows_per_gpu,
+            common_start_ns=common_start_ns,
+            common_end_ns=common_end_ns,
+            overlap_seconds=overlap_seconds,
+            usable_seconds=usable_seconds,
+            sampling_gaps=sampling_gaps,
+        )
+    usable_samples_by_gpu = {
+        gpu: [
+            sample
+            for sample in samples_by_gpu[gpu]
+            if usable_start_ns <= int(sample["monotonic_ns"]) <= usable_end_ns
+        ]
+        for gpu in (0, 1)
+    }
+    aligned_pairs = len(
+        align_samples_by_timestamp(
+            usable_samples_by_gpu[0],
+            usable_samples_by_gpu[1],
+            tolerance_seconds=tolerance,
+        )
+    )
+    if aligned_pairs < 2:
+        return [], _excluded_record(
+            corpus,
+            plan,
+            windows,
+            tolerance,
+            CoverageReason.INSUFFICIENT_SAMPLES,
+            f"run={plan.accepted_run_id} aligned_sample_pairs={aligned_pairs}; required>=2",
+            manifest=manifest,
+            rows_per_gpu=rows_per_gpu,
+            common_start_ns=common_start_ns,
+            common_end_ns=common_end_ns,
+            overlap_seconds=overlap_seconds,
+            usable_seconds=usable_seconds,
+            aligned_pairs=aligned_pairs,
+            sampling_gaps=sampling_gaps,
+        )
+    try:
+        features = extract_run_features(
+            manifest,
+            samples,
+            window_lengths=windows,
+            stride_fraction=stride_fraction,
+            exclude_startup=exclude_startup,
+            alignment_tolerance_seconds=tolerance,
+            plan=plan,
+            corpus=corpus,
+        )
+    except Exception as exc:
+        return [], _excluded_record(
+            corpus,
+            plan,
+            windows,
+            tolerance,
+            CoverageReason.FEATURE_ERROR,
+            f"run={plan.accepted_run_id} feature error: {type(exc).__name__}: {exc}",
+            manifest=manifest,
+            rows_per_gpu=rows_per_gpu,
+            common_start_ns=common_start_ns,
+            common_end_ns=common_end_ns,
+            overlap_seconds=overlap_seconds,
+            usable_seconds=usable_seconds,
+            aligned_pairs=aligned_pairs,
+            sampling_gaps=sampling_gaps,
+        )
+    if not features:
+        return [], _excluded_record(
+            corpus,
+            plan,
+            windows,
+            tolerance,
+            CoverageReason.INSUFFICIENT_SAMPLES,
+            f"run={plan.accepted_run_id} emitted no complete, timestamp-aligned windows",
+            manifest=manifest,
+            rows_per_gpu=rows_per_gpu,
+            common_start_ns=common_start_ns,
+            common_end_ns=common_end_ns,
+            overlap_seconds=overlap_seconds,
+            usable_seconds=usable_seconds,
+            aligned_pairs=aligned_pairs,
+            sampling_gaps=sampling_gaps,
+        )
+    emitted = Counter(f"{float(row['window_seconds']):g}" for row in features)
+    coverage = CoverageRecord(
+        plan_id=plan.plan_id,
+        run_id=plan.accepted_run_id,
+        workload_family=plan.workload_family,
+        target_label=plan.target_label,
+        designation=plan.designation,
+        experiment_session_id=corpus.experiment_session_id,
+        collection_id=corpus.collection_id,
+        corpus_id=corpus.corpus_id,
+        node_id=corpus.node_id,
+        status="included",
+        reason_code=None,
+        detail=f"run={plan.accepted_run_id} emitted {len(features)} feature windows",
+        started_at_utc=str(manifest.get("started_at_utc")),
+        ended_at_utc=str(manifest.get("ended_at_utc")),
+        rows_per_gpu=rows_per_gpu,
+        common_start_monotonic_ns=common_start_ns,
+        common_end_monotonic_ns=common_end_ns,
+        common_overlap_seconds=overlap_seconds,
+        configured_warmup_seconds=warmup,
+        usable_duration_seconds=usable_seconds,
+        requested_window_seconds=windows,
+        emitted_windows={f"{window:g}": emitted[f"{window:g}"] for window in windows},
+        sampling_gap_seconds_by_gpu=sampling_gaps,
+        alignment_tolerance_seconds=tolerance,
+        aligned_sample_pairs=aligned_pairs,
+        legacy_grouping_ambiguous=bool(manifest.get("legacy_grouping_ambiguous", False)),
+    )
+    return features, coverage
+
+
+def extract_feature_result(
+    input_root: str | Path,
+    corpus_manifest: CorpusManifest | Mapping[str, Any] | str | Path,
     output: str | Path | None = None,
-    window_lengths: Sequence[float] = (5.0, 15.0, 30.0),
+    window_lengths: Sequence[float] = DEFAULT_WINDOW_SECONDS,
     stride_fraction: float = 0.5,
     exclude_startup: bool = True,
-    include_calibration: bool = False,
-) -> list[dict[str, Any]]:
-    """Load completed runs, derive features, and optionally save a create-only table."""
+    alignment_tolerance_seconds: float = 0.25,
+    selected_designation: str = "benign",
+) -> ExtractionResult:
+    """Extract declared-corpus features and one coverage record per planned run."""
+    corpus = _load_corpus_manifest(corpus_manifest)
+    windows = tuple(float(value) for value in window_lengths)
+    if not windows or any(value <= 0 for value in windows):
+        raise ValueError("window lengths must be positive")
+    if len(windows) != len(set(windows)):
+        raise ValueError("window lengths must be unique")
+    if alignment_tolerance_seconds < 0:
+        raise ValueError("alignment_tolerance_seconds cannot be negative")
     root = Path(input_root)
-    rows: list[dict[str, Any]] = []
-    for manifest_path in sorted((root / "runs").glob("*/manifest.json")):
-        manifest = load_artifact(manifest_path)
-        assert isinstance(manifest, dict)
-        if manifest["exit_status"] != "completed" or not manifest["participation_valid"]:
-            continue
-        if manifest["designation"] == "calibration" and not include_calibration:
-            continue
-        telemetry_path = manifest_path.parent / "telemetry.jsonl"
-        if not telemetry_path.exists():
-            continue
-        samples = load_artifact(telemetry_path)
-        assert isinstance(samples, list)
-        rows.extend(
-            extract_run_features(
-                manifest,
-                samples,
-                window_lengths=window_lengths,
-                stride_fraction=stride_fraction,
-                exclude_startup=exclude_startup,
-            )
+    features: list[dict[str, Any]] = []
+    coverage: list[CoverageRecord] = []
+    for plan in corpus.planned_runs:
+        run_features, record = _extract_planned_run(
+            root,
+            corpus,
+            plan,
+            windows,
+            stride_fraction,
+            exclude_startup,
+            alignment_tolerance_seconds,
+            selected_designation,
         )
-    labels = {str(row["target_label"]) for row in rows}
-    lengths_by_label = {
-        label: {float(row["window_seconds"]) for row in rows if str(row["target_label"]) == label}
-        for label in labels
-    }
-    common_lengths = set.intersection(*lengths_by_label.values()) if lengths_by_label else set()
-    rows = [row for row in rows if float(row["window_seconds"]) in common_lengths]
+        features.extend(run_features)
+        coverage.append(record)
+    result = ExtractionResult(tuple(features), tuple(coverage), corpus.corpus_id, windows)
     if output is not None:
         store = ArtifactStore(output)
         store.initialize()
-        stamp = datetime.now().strftime("%Y%m%dT%H%M%S%f")
-        store.write_jsonl(f"features/features-{stamp}.jsonl", rows)
-    return rows
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        feature_path = store.write_jsonl(f"features/features-{stamp}.jsonl", result.features)
+        coverage_path = store.write_jsonl(
+            f"features/coverage-{stamp}.jsonl",
+            [record.to_dict() for record in result.coverage],
+        )
+        summary = {
+            **result.summary(),
+            "feature_artifact": str(feature_path.relative_to(store.root)),
+            "coverage_artifact": str(coverage_path.relative_to(store.root)),
+        }
+        store.write_json(f"features/extraction-{stamp}.json", summary)
+    return result
+
+
+def extract_features(
+    input_root: str | Path = "artifacts",
+    output: str | Path | None = None,
+    window_lengths: Sequence[float] = DEFAULT_WINDOW_SECONDS,
+    stride_fraction: float = 0.5,
+    exclude_startup: bool = True,
+    *,
+    corpus_manifest: CorpusManifest | Mapping[str, Any] | str | Path | None = None,
+    alignment_tolerance_seconds: float = 0.25,
+    selected_designation: str = "benign",
+) -> list[dict[str, Any]]:
+    """Backward-shaped row return with mandatory explicit corpus selection."""
+    if corpus_manifest is None:
+        raise ValueError(
+            "corpus_manifest is required; implicit directory-wide feature selection is prohibited"
+        )
+    result = extract_feature_result(
+        input_root,
+        corpus_manifest,
+        output=output,
+        window_lengths=window_lengths,
+        stride_fraction=stride_fraction,
+        exclude_startup=exclude_startup,
+        alignment_tolerance_seconds=alignment_tolerance_seconds,
+        selected_designation=selected_designation,
+    )
+    return list(result.features)
 
 
 def numeric_feature_columns(rows: Iterable[dict[str, Any]]) -> list[str]:

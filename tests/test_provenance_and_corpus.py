@@ -141,6 +141,29 @@ def test_new_manifest_requires_true_grouping_fields() -> None:
         validate_artifact(payload)
 
 
+def test_new_manifest_validates_measured_interval_provenance() -> None:
+    payload = legacy_manifest().to_dict()
+    payload.update(
+        {
+            "schema_version": CURRENT_SCHEMA_VERSION,
+            "experiment_session_id": "session-a",
+            "collection_id": "collection-a",
+            "corpus_id": "corpus-a",
+            "node_id": "node-0",
+            "source_dirty": False,
+            "random_seed": 1337,
+            "measurement_start_monotonic_ns": 1_000_000_000,
+            "measurement_end_monotonic_ns": 31_000_000_000,
+            "measured_duration_seconds": 30.0,
+        }
+    )
+    validate_artifact(payload)
+
+    payload["measured_duration_seconds"] = 29.0
+    with pytest.raises(ValidationError, match="must equal"):
+        validate_artifact(payload)
+
+
 def test_environment_fingerprint_excludes_live_measurement_values() -> None:
     base = {
         "gpus": [{"uuid": "GPU-0"}, {"uuid": "GPU-1"}],

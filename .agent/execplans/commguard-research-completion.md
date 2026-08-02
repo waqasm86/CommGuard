@@ -110,7 +110,9 @@ Acceptance: all available CPU, lint, format, build, import, CLI, notebook, secre
 - [x] `2026-08-02T13:40:10+05:00` Recorded the current feature-branch/HEAD/tool/check state and the exact three-file partial Phase 02 worktree boundary in `.agent/state/20260802T084010Z/baseline.md`.
 - [x] `2026-08-02T13:51:00+05:00` Phase 02 completed: added v2 provenance/corpus contracts, true session/collection/corpus/node propagation through orchestration, stable capability-based environment fingerprints, dirty-source/input/notebook provenance, and non-destructive legacy ambiguity mapping.
 - [x] `2026-08-02T13:51:00+05:00` Phase 02 acceptance: 65 CPU-safe tests passed/5 deselected; Ruff check/format, temporary-output wheel/sdist build, import/public API, CLI help, and `git diff --check` passed. New tests cover shared-session/unique-run IDs, separate sessions in one corpus, exact designation-aware allow-lists, actual matrix context reuse, v1 migration, v2 required fields, and stable environment hashing.
-- [ ] Execute Phase 03 and its acceptance checks.
+- [x] `2026-08-02T13:53:00+05:00` Phase 03 started from clean commit `0e8b505`; implement coverage records/results, corpus-only selection, timestamp alignment, strict gates, and duration-controlled execution before running acceptance checks.
+- [x] `2026-08-02T14:11:37+05:00` Phase 03 completed: declared-corpus extraction now emits linked v2 feature, coverage, and summary artifacts with one diagnostic per plan; cross-GPU values use deterministic tolerance-based timestamp pairs; actual rank measurement intersections bound new feature windows; and the 30-second primary gate cannot be silently replaced by diagnostic short windows.
+- [x] `2026-08-02T14:11:37+05:00` Phase 03 acceptance: 79 CPU-safe tests passed/5 deselected; Ruff check/format, temporary-output wheel/sdist build, import, CLI help, and `git diff --check` passed. Regressions cover exact 4.4-second post-warmup exclusion, calibration-idle leakage, sampling gaps, missing plans, timestamp skew, incomplete evaluation refusal, primary/diagnostic separation, duration cap failure, and measured-interval schema/participation validation.
 - [ ] Execute Phase 04 and its acceptance checks.
 - [ ] Execute Phase 05 and its acceptance checks.
 - [ ] Execute Phase 06 and its acceptance checks.
@@ -130,6 +132,7 @@ Acceptance: all available CPU, lint, format, build, import, CLI, notebook, secre
 - `2026-08-02`: Continue the existing partial Phase 02 implementation selectively. Do not replace it wholesale; first make its v2 manifest requirements coherent with orchestration and add regression tests for every new contract.
 - `2026-08-02`: Treat a corpus as a deliberate matrix that may span sessions. Each session-specific collection manifest has a unique `collection_id` and true `experiment_session_id`, while deliberately repeated collections may share the same `corpus_id`.
 - `2026-08-02`: Keep `session_fingerprint` only as a compatibility alias in new environment reports. It equals `environment_fingerprint`, is explicitly non-semantic for grouping, and live telemetry values are excluded from its stable-capability hash.
+- `2026-08-02`: Define 30 seconds as the immutable primary feature window and 5/15 seconds as diagnostics. Benign workload defaults collect 35 measured seconds after warmup so asynchronous sampler edges do not make a nominal 30-second run incapable of producing a 30-second common window.
 
 ## Discoveries
 
@@ -142,6 +145,7 @@ Acceptance: all available CPU, lint, format, build, import, CLI, notebook, secre
 - Every merged manifest has a distinct environment fingerprint. The feature artifact therefore reports eight apparent “sessions” for eight runs, reproducing the invalid grouping defect.
 - Calibration-stage idle runs entered the 16-row feature artifact. Primary corpus selection must come from a declared corpus manifest, not designation alone.
 - At the Phase 02 resumption boundary, schema validation accepts v2 but the orchestrator still constructs a v2 `RunManifest` without required session/corpus/node/dirty/seed fields. Existing tests do not exercise that path because GPU orchestration is hardware-marked.
+- Iteration-only completion was not sufficient evidence of usable telemetry duration. Rank-local measurement events and their common monotonic intersection are now required for completed, participation-valid v2 manifests; physical GPU execution remains pending compatible hardware.
 
 ## Schema migrations
 
@@ -166,6 +170,12 @@ returns a new `2.0` view with `source_schema_version: "1.0"` and
 `legacy_grouping_ambiguous: true`; it never changes the source file. Unknown
 session/corpus/node fields remain null rather than being inferred. Full field
 semantics and compatibility behavior are in `docs/schema-migrations.md`.
+
+Phase 03 extends version `2.0` with linked `feature_row`, `coverage_record`, and
+`feature_extraction_result` artifacts. Coverage includes sampling gaps and exact
+window counts, while completed v2 run manifests include an ordered, internally
+consistent measured interval. Historical v1 feature rows remain readable and
+are not assigned invented grouping IDs.
 
 ## Validation matrix
 
@@ -192,6 +202,10 @@ pre-Phase-01 boundary.
 Phase 02 validation update: schema/provenance/corpus tests pass locally;
 coverage, split, central-monitoring, and expanded workload tests remain pending
 their respective phases. Ruff format no longer has a pending Phase 02 failure.
+
+Phase 03 validation update: coverage, timestamp alignment, duration control,
+measurement provenance, and strict pre-evaluation coverage gates pass locally.
+Grouped split/evaluation semantics beyond the coverage gate remain Phase 04.
 
 ## Recovery and idempotence
 

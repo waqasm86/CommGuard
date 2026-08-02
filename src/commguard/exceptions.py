@@ -21,5 +21,13 @@ class WorkloadError(CommGuardError):
     """A workload failed or its participation evidence was invalid."""
 
 
+class DurationRequirementError(WorkloadError):
+    """A workload stopped before its declared measurement interval was met."""
+
+
+class CoverageError(CommGuardError):
+    """Primary evaluation coverage requirements were not satisfied."""
+
+
 class ArtifactExistsError(CommGuardError):
     """A create-only artifact already exists."""

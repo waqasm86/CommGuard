@@ -19,7 +19,11 @@ seed, model/workload dimensions,
 precision, batch/sequence/accumulation, world size, environment fingerprint,
 source commit, warmup, timestamps, NCCL environment, rank exit codes,
 participation validity, failure category/reason, source dirty state, optional
-notebook/input archive provenance, and exit status.
+notebook/input archive provenance, and exit status. Completed, participation-
+valid version 2 runs also record the common monotonic measurement start, end,
+and duration. Validation requires those three values to be ordered and exactly
+consistent; they describe the intersection of the two rank-local measured
+intervals.
 
 ## Corpus manifest
 
@@ -33,6 +37,27 @@ Each row has run/GPU/sequence identity, UTC and monotonic timestamps, and exactl
 nine `FieldReading` objects. A supported field contains a finite value and unit.
 An unsupported field contains `value: null`, `supported: false`, and an error.
 Zeros remain legitimate measurements and are not used as missing sentinels.
+
+## Feature extraction and coverage
+
+Version 2 extraction is selected only through a declared corpus manifest. It
+writes three linked, create-only artifacts under `features/`: feature-row
+JSONL, coverage-record JSONL, and an extraction summary JSON. The summary names
+the exact two JSONL inputs, records the requested windows, and labels 30 seconds
+as the primary policy while 5- and 15-second windows remain diagnostic.
+
+There is exactly one coverage record per planned corpus slot. It records the
+plan/run/family/label/session/collection/corpus/node context, inclusion status,
+structured reason code and detail, rows per GPU, common monotonic interval,
+warmup and usable duration, per-GPU sampling-gap statistics, timestamp-aligned
+pair count/tolerance, and emitted counts for every requested window. Missing,
+short, invalid, or unaligned evidence is therefore represented explicitly
+rather than disappearing from the feature table.
+
+Version 1 feature rows remain loadable and are marked as having ambiguous
+legacy grouping when migrated in memory. Direct low-level feature extraction
+without corpus provenance returns version 1-compatible diagnostic rows; new
+persisted research extraction uses version 2 rows with true grouping IDs.
 
 ## Other records
 

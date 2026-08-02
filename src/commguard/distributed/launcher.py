@@ -73,6 +73,8 @@ def validate_participation(output: str | Path, mode: str) -> tuple[bool, list[st
     startups: list[dict[str, Any]] = []
     rank_exit_codes: dict[str, int] = {}
     required = {"startup", "cuda_operation_complete", "heartbeat", "completion"}
+    if mode != "smoke":
+        required.add("measurement_interval")
     if mode == "ddp_train":
         required |= {
             "model_ready",
@@ -96,6 +98,24 @@ def validate_participation(output: str | Path, mode: str) -> tuple[bool, list[st
         else:
             problems.append(f"rank {rank} has no startup identity")
         failed = "failure" in names or "completion" not in names
+        measurement = next(
+            (event for event in events if event.get("event") == "measurement_interval"),
+            None,
+        )
+        if measurement is not None:
+            details = measurement.get("details", {})
+            start_ns = details.get("measurement_start_monotonic_ns")
+            end_ns = details.get("measurement_end_monotonic_ns")
+            duration = details.get("measured_duration_seconds")
+            if (
+                not isinstance(start_ns, int)
+                or not isinstance(end_ns, int)
+                or end_ns < start_ns
+                or not isinstance(duration, (int, float))
+                or duration < 0
+                or abs(float(duration) - ((end_ns - start_ns) / 1e9)) > 1e-6
+            ):
+                problems.append(f"rank {rank} has invalid measurement interval details")
         rank_exit_codes[str(rank)] = 1 if failed else 0
     if len(startups) == 2:
         if {item.get("rank") for item in startups} != {0, 1}:

@@ -15,6 +15,11 @@ BASE_MODEL = {
     "precision": "float16",
     "gradient_scaling": True,
     "iterations": 8,
+    "warmup_seconds": 5.0,
+    # Five seconds of margin keeps the sampled common interval above the
+    # declared 30-second primary window despite asynchronous sampler edges.
+    "min_measured_seconds": 35.0,
+    "iteration_cap": None,
     "gradient_accumulation": 1,
     "learning_rate": 0.001,
 }
@@ -31,6 +36,7 @@ WORKLOADS: dict[str, dict[str, Any]] = {
         "burst_iterations": 10,
         "iteration_interval_s": 0.25,
         "estimated_seconds": 15,
+        "warmup_seconds": 0.0,
     },
     "ddp_train": {
         **BASE_MODEL,
@@ -114,7 +120,10 @@ WORKLOADS: dict[str, dict[str, Any]] = {
         "designation": "benign",
         "matrix_size": 2048,
         "iterations": 20,
-        "estimated_seconds": 30,
+        "warmup_seconds": 5.0,
+        "min_measured_seconds": 35.0,
+        "iteration_cap": None,
+        "estimated_seconds": 45,
     },
     "control_host_transfer": {
         "mode": "control_host_transfer",
@@ -123,7 +132,10 @@ WORKLOADS: dict[str, dict[str, Any]] = {
         "designation": "benign",
         "payload_mib": 64,
         "iterations": 20,
-        "estimated_seconds": 30,
+        "warmup_seconds": 5.0,
+        "min_measured_seconds": 35.0,
+        "iteration_cap": None,
+        "estimated_seconds": 45,
     },
     "control_model_load": {
         **BASE_MODEL,
@@ -132,7 +144,10 @@ WORKLOADS: dict[str, dict[str, Any]] = {
         "family": "model_loading",
         "designation": "benign",
         "iterations": 8,
-        "estimated_seconds": 30,
+        "warmup_seconds": 5.0,
+        "min_measured_seconds": 35.0,
+        "iteration_cap": None,
+        "estimated_seconds": 45,
     },
     "control_peer_copy": {
         "mode": "control_peer_copy",
@@ -141,7 +156,10 @@ WORKLOADS: dict[str, dict[str, Any]] = {
         "designation": "benign",
         "payload_mib": 64,
         "iterations": 10,
-        "estimated_seconds": 20,
+        "warmup_seconds": 5.0,
+        "min_measured_seconds": 35.0,
+        "iteration_cap": None,
+        "estimated_seconds": 45,
         "optional": True,
     },
     "control_idle": {
@@ -150,8 +168,11 @@ WORKLOADS: dict[str, dict[str, Any]] = {
         "family": "idle",
         "designation": "benign",
         "iterations": 20,
+        "warmup_seconds": 5.0,
+        "min_measured_seconds": 35.0,
+        "iteration_cap": None,
         "idle_interval_s": 0.25,
-        "estimated_seconds": 10,
+        "estimated_seconds": 45,
     },
 }
 

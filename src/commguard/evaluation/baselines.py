@@ -13,8 +13,14 @@ from typing import Any
 
 from commguard.artifacts import ArtifactStore
 from commguard.exceptions import CalibrationError
-from commguard.features import METADATA_COLUMNS, numeric_feature_columns
-from commguard.schemas import SCHEMA_VERSION, load_artifact
+from commguard.features import (
+    METADATA_COLUMNS,
+    PRIMARY_BENIGN_FAMILIES,
+    load_extraction_result,
+    numeric_feature_columns,
+    require_primary_coverage,
+)
+from commguard.schemas import SCHEMA_VERSION
 
 
 def grouped_split(
@@ -386,6 +392,8 @@ def evaluate_detector(
     input_root: str | Path = "artifacts",
     output: str | Path | None = None,
     negative_calibration_mode: bool = False,
+    required_families: tuple[str, ...] = PRIMARY_BENIGN_FAMILIES,
+    minimum_runs_per_family: int = 1,
 ) -> dict[str, Any]:
     """Fit transparent baselines on saved feature rows using whole-run splits."""
     root = Path(input_root)
@@ -401,14 +409,16 @@ def evaluate_detector(
             f"detector fitting blocked because calibration is {reason}; "
             "use explicit negative-calibration mode only for negative-result analysis"
         )
+    extraction = load_extraction_result(root)
+    coverage_gate = require_primary_coverage(
+        extraction,
+        required_families=required_families,
+        minimum_runs_per_family=minimum_runs_per_family,
+    )
     import pandas as pd
 
+    rows = list(extraction.features)
     feature_paths = sorted((root / "features").glob("features-*.jsonl"))
-    if not feature_paths:
-        raise FileNotFoundError("no feature artifact found")
-    loaded = load_artifact(feature_paths[-1])
-    assert isinstance(loaded, list)
-    rows = loaded
     frame = pd.DataFrame(rows)
     frame["_target"] = (frame["target_label"] == "training").astype(int)
     columns = numeric_feature_columns(rows)
@@ -444,6 +454,7 @@ def evaluate_detector(
         "calibration_status": calibration.get("status") if calibration else "missing",
         "negative_calibration_mode": negative_calibration_mode,
         "feature_source": str(feature_paths[-1]),
+        "coverage_gate": coverage_gate,
         "window_count": len(rows),
         "run_count": len(assignments),
         "split_run_counts": dict(split_counts),

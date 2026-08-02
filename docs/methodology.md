@@ -19,12 +19,39 @@ only to the reported reliable payload groups. Calibration failure prevents
 standard/extended detector collection unless explicit negative-calibration
 research mode is selected.
 
+Feature extraction requires an explicit versioned corpus manifest and produces
+one coverage decision for every planned slot. Calibration-designated controls
+cannot enter a benign selection. Coverage records expose exact per-GPU row
+counts, common overlap, warmup, usable duration, sampling gaps, aligned pairs,
+and per-window output counts. A missing or invalid run is never silently
+skipped.
+
+The primary window is 30 seconds. Five- and 15-second windows are separately
+labeled diagnostic short-window analyses; they are useful for diagnosing old
+pilot evidence but never substitute for primary coverage. Primary evaluation
+requires every required benign family and its configured minimum run count to
+have at least one 30-second window before any model fitting or metric
+calculation.
+
+Cross-GPU features use deterministic, no-reuse timestamp pairing within a
+configurable tolerance. Independently filtered device arrays are not paired by
+position. Per-GPU TX/RX features likewise use values supported in the same
+telemetry sample.
+
 Features include distribution summaries, variation, slopes, autocorrelation,
 idle/duty fractions, PCIe totals/ratios, missingness, cross-GPU divergence, and
 cross-correlation. Evaluation compares majority, simple PCIe rule, logistic
 regression, and random forest with PCIe-only, non-PCIe, and combined ablations.
 It reports window and run metrics, per-family errors, calibration quality, and
 an abstention region.
+
+Benign workloads are duration-controlled. Each declares warmup, minimum
+steady-state measurement duration, and an optional iteration cap. The current
+defaults collect at least 35 measured seconds after a five-second warmup; the
+margin prevents asynchronous one-Hz sampler edges from reducing the common
+telemetry interval below the 30-second primary window. A supplied cap causes an
+explicit failure if duration remains unmet. Rank-local interval events are
+validated and their intersection is persisted in the run manifest.
 
 Falsification includes unresponsive counters, substantial class overlap,
 grouped-score collapse, duration/startup/framework leakage, hard-negative false

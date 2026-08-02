@@ -98,15 +98,38 @@ def _write_run_evidence(
 ) -> dict[str, Any]:
     run_prefix = Path("runs") / run_id
     rank_runtime_evidence: dict[str, dict[str, Any]] = {}
+    measurement_intervals: list[dict[str, Any]] = []
     for rank in (0, 1):
         event_path = store.resolve(run_prefix / f"rank-{rank}.events.jsonl")
         evidence: dict[str, Any] = {}
         if event_path.exists():
             for line in event_path.read_text(encoding="utf-8").splitlines():
                 event = json.loads(line)
-                if event.get("event") in {"startup", "model_ready", "memory_peak"}:
+                if event.get("event") in {
+                    "startup",
+                    "model_ready",
+                    "memory_peak",
+                    "measurement_interval",
+                }:
                     evidence[str(event["event"])] = event.get("details", {})
+                if event.get("event") == "measurement_interval":
+                    measurement_intervals.append(dict(event.get("details", {})))
         rank_runtime_evidence[str(rank)] = evidence
+    measurement_start_ns = (
+        max(int(item["measurement_start_monotonic_ns"]) for item in measurement_intervals)
+        if len(measurement_intervals) == 2
+        else None
+    )
+    measurement_end_ns = (
+        min(int(item["measurement_end_monotonic_ns"]) for item in measurement_intervals)
+        if len(measurement_intervals) == 2
+        else None
+    )
+    measured_duration_seconds = (
+        max(0.0, (measurement_end_ns - measurement_start_ns) / 1e9)
+        if measurement_start_ns is not None and measurement_end_ns is not None
+        else None
+    )
     manifested_config = {**config, "rank_runtime_evidence": rank_runtime_evidence}
     if collector.samples:
         store.write_jsonl(
@@ -195,6 +218,9 @@ def _write_run_evidence(
         input_archive_sha256=provenance.input_archive_sha256,
         notebook_version=provenance.notebook_version,
         random_seed=int(config["seed"]),
+        measurement_start_monotonic_ns=measurement_start_ns,
+        measurement_end_monotonic_ns=measurement_end_ns,
+        measured_duration_seconds=measured_duration_seconds,
         schema_version=CURRENT_SCHEMA_VERSION,
     )
     store.write_json(run_prefix / "manifest.json", manifest.to_dict())

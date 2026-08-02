@@ -51,6 +51,8 @@ ARTIFACT_KINDS = {
     "experiment_summary",
     "calibration_result",
     "corpus_manifest",
+    "coverage_record",
+    "feature_extraction_result",
 }
 
 
@@ -217,6 +219,9 @@ class RunManifest:
     input_archive_sha256: str | None = None
     notebook_version: str | None = None
     random_seed: int | None = None
+    measurement_start_monotonic_ns: int | None = None
+    measurement_end_monotonic_ns: int | None = None
+    measured_duration_seconds: float | None = None
     legacy_grouping_ambiguous: bool = False
     schema_version: str = CURRENT_SCHEMA_VERSION
     artifact_kind: str = "run_manifest"
@@ -246,6 +251,43 @@ class RunManifest:
             _require(bool(self.node_id), "node_id", "required")
             _require(isinstance(self.source_dirty, bool), "source_dirty", "must be a boolean")
             _require(self.random_seed == self.seed, "random_seed", "must equal seed")
+            if self.exit_status == "completed" and self.participation_valid:
+                _require(
+                    self.measurement_start_monotonic_ns is not None,
+                    "measurement_start_monotonic_ns",
+                    "required for a completed v2 run",
+                )
+                _require(
+                    self.measurement_end_monotonic_ns is not None,
+                    "measurement_end_monotonic_ns",
+                    "required for a completed v2 run",
+                )
+                _require(
+                    self.measured_duration_seconds is not None
+                    and self.measured_duration_seconds >= 0,
+                    "measured_duration_seconds",
+                    "must be non-negative",
+                )
+                assert self.measurement_start_monotonic_ns is not None
+                assert self.measurement_end_monotonic_ns is not None
+                assert self.measured_duration_seconds is not None
+                _require(
+                    self.measurement_start_monotonic_ns >= 0
+                    and self.measurement_end_monotonic_ns >= self.measurement_start_monotonic_ns,
+                    "measurement interval",
+                    "must be ordered and non-negative",
+                )
+                _require(
+                    math.isclose(
+                        self.measured_duration_seconds,
+                        (self.measurement_end_monotonic_ns - self.measurement_start_monotonic_ns)
+                        / 1e9,
+                        rel_tol=0.0,
+                        abs_tol=1e-6,
+                    ),
+                    "measured_duration_seconds",
+                    "must equal the monotonic measurement interval",
+                )
 
     def to_dict(self) -> dict[str, Any]:
         self.validate()
@@ -323,6 +365,21 @@ def validate_artifact(data: Mapping[str, Any]) -> None:
         )
         _require(float(data["window_seconds"]) > 0, "window_seconds", "must be positive")
         _require(int(data["window_index"]) >= 0, "window_index", "must be non-negative")
+        if data.get("schema_version") == CURRENT_SCHEMA_VERSION:
+            _require_fields(
+                data,
+                "feature_row",
+                (
+                    "plan_id",
+                    "experiment_session_id",
+                    "collection_id",
+                    "corpus_id",
+                    "node_id",
+                    "environment_fingerprint",
+                    "aligned_sample_pairs",
+                ),
+            )
+            _require(int(data["aligned_sample_pairs"]) >= 2, "aligned_sample_pairs", "too few")
     elif kind == "split_assignment":
         _require_fields(data, "split_assignment", ("run_id", "split"))
         _require(
@@ -356,6 +413,31 @@ def validate_artifact(data: Mapping[str, Any]) -> None:
         from commguard.corpus import CorpusManifest
 
         CorpusManifest.from_dict(data).validate()
+    elif kind == "coverage_record":
+        from commguard.features.coverage import CoverageRecord
+
+        CoverageRecord(**data).validate()
+    elif kind == "feature_extraction_result":
+        _require_fields(
+            data,
+            "feature_extraction_result",
+            (
+                "corpus_id",
+                "selection_mode",
+                "requested_window_seconds",
+                "planned_run_count",
+                "included_run_count",
+                "excluded_run_count",
+                "feature_row_count",
+                "reason_counts",
+                "window_policy",
+            ),
+        )
+        _require(
+            data["selection_mode"] == "declared_corpus_manifest",
+            "selection_mode",
+            "implicit selection is prohibited",
+        )
 
 
 def _require_fields(data: Mapping[str, Any], path: str, names: tuple[str, ...]) -> None:
@@ -383,6 +465,9 @@ def _migrate_legacy_record(data: dict[str, Any]) -> dict[str, Any]:
                 "input_archive_sha256": None,
                 "notebook_version": None,
                 "random_seed": migrated.get("seed"),
+                "measurement_start_monotonic_ns": None,
+                "measurement_end_monotonic_ns": None,
+                "measured_duration_seconds": None,
             }
         )
     elif kind == "feature_row":

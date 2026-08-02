@@ -65,7 +65,15 @@ def _parser() -> argparse.ArgumentParser:
     features = subparsers.add_parser("features", help="derive deterministic feature windows")
     features.add_argument("--input", type=Path, default=Path("artifacts"))
     features.add_argument("--output", type=Path, default=Path("artifacts"))
-    features.add_argument("--windows", type=float, nargs="+", default=[5, 15, 30])
+    features.add_argument("--corpus-manifest", type=Path, required=True)
+    features.add_argument(
+        "--windows",
+        type=float,
+        nargs="+",
+        default=[5, 15, 30],
+        help="requested windows; 30 seconds is primary and 5/15 are diagnostic",
+    )
+    features.add_argument("--alignment-tolerance-seconds", type=float, default=0.25)
     features.add_argument("--include-startup", action="store_true")
 
     evaluate = subparsers.add_parser("evaluate", help="run grouped detector evaluation")
@@ -131,6 +139,8 @@ def main(argv: list[str] | None = None) -> int:
                 output=args.output,
                 window_lengths=args.windows,
                 exclude_startup=not args.include_startup,
+                corpus_manifest=args.corpus_manifest,
+                alignment_tolerance_seconds=args.alignment_tolerance_seconds,
             )
             _json({"feature_rows": len(rows), "output": str(args.output)})
         elif args.command == "evaluate":

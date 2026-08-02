@@ -14,6 +14,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from commguard.duration import DurationController, DurationPolicy
+
 
 class EventWriter:
     def __init__(self, path: Path, run_id: str, rank: int, local_rank: int) -> None:
@@ -38,6 +40,14 @@ class EventWriter:
         with self.path.open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(record, sort_keys=True, allow_nan=False) + "\n")
             stream.flush()
+
+
+def _duration_controller(config: dict[str, Any]) -> DurationController:
+    return DurationController(DurationPolicy.from_config(config))
+
+
+def _emit_measurement_interval(writer: EventWriter, controller: DurationController) -> None:
+    writer.emit("measurement_interval", **controller.finish().to_dict())
 
 
 def _gpu_uuid(local_rank: int) -> str:
@@ -149,7 +159,6 @@ def _run_ddp_training(
         [parameter for parameter in model.parameters() if parameter.requires_grad],
         lr=float(config.get("learning_rate", 1e-3)),
     )
-    iterations = int(config.get("iterations", 8))
     gradient_accumulation = int(config.get("gradient_accumulation", 1))
     batch_size = int(config.get("batch_size", 4))
     sequence_length = int(config.get("sequence_length", 128))
@@ -180,7 +189,9 @@ def _run_ddp_training(
         gradient_scaling=gradient_scaling,
     )
     dist.barrier()
-    for step in range(iterations):
+    controller = _duration_controller(config)
+    step = 0
+    while controller.should_continue():
         optimizer.zero_grad(set_to_none=True)
         if stagger_s:
             time.sleep(stagger_s)
@@ -236,6 +247,9 @@ def _run_ddp_training(
         writer.emit("heartbeat", step=step)
         if idle_padding_s:
             time.sleep(idle_padding_s)
+        controller.complete_iteration()
+        step += 1
+    _emit_measurement_interval(writer, controller)
     writer.emit(
         "memory_peak",
         allocated_bytes=int(torch.cuda.max_memory_allocated(local_rank)),
@@ -252,14 +266,15 @@ def _run_inference(
     synchronized: bool,
 ) -> None:
     model = _tiny_model(torch, config).cuda(local_rank).eval()
-    iterations = int(config.get("iterations", 20))
     batch_size = int(config.get("batch_size", 4))
     sequence_length = int(config.get("sequence_length", 128))
     vocab_size = int(config.get("vocab_size", 2048))
     pattern = str(config.get("inference_pattern", "prefill"))
+    controller = _duration_controller(config)
+    step = 0
     with torch.inference_mode():
         tokens = torch.randint(vocab_size, (batch_size, sequence_length), device=local_rank)
-        for step in range(iterations):
+        while controller.should_continue():
             if synchronized:
                 dist.barrier()
             if pattern == "decode":
@@ -271,6 +286,9 @@ def _run_inference(
             checksum = float(logits.float().sum())
             writer.emit("forward_complete", step=step, checksum=checksum, pattern=pattern)
             writer.emit("heartbeat", step=step)
+            controller.complete_iteration()
+            step += 1
+    _emit_measurement_interval(writer, controller)
     writer.emit(
         "memory_peak",
         allocated_bytes=int(torch.cuda.max_memory_allocated(local_rank)),
@@ -288,9 +306,14 @@ def _run_single_gpu_inference(
     if writer.rank == 0:
         _run_inference(torch, dist, writer, config, local_rank, synchronized=False)
         return
-    for step in range(int(config.get("iterations", 20))):
+    controller = _duration_controller(config)
+    step = 0
+    while controller.should_continue():
         time.sleep(float(config.get("idle_rank_interval_s", 0.05)))
         writer.emit("heartbeat", step=step, role="idle_second_gpu")
+        controller.complete_iteration()
+        step += 1
+    _emit_measurement_interval(writer, controller)
 
 
 def _run_control(
@@ -301,19 +324,23 @@ def _run_control(
     local_rank: int,
     control: str,
 ) -> None:
-    iterations = int(config.get("iterations", 20))
+    controller = _duration_controller(config)
     if control == "compute":
         size = int(config.get("matrix_size", 2048))
         left = torch.randn(size, size, device=local_rank)
         right = torch.randn(size, size, device=local_rank)
-        for step in range(iterations):
+        step = 0
+        while controller.should_continue():
             output = left @ right
             writer.emit("cuda_operation_complete", step=step, checksum=float(output[0, 0]))
             writer.emit("heartbeat", step=step)
+            controller.complete_iteration()
+            step += 1
     elif control == "host_transfer":
         size_mib = int(config.get("payload_mib", 64))
         host = torch.empty(size_mib * 1024 * 1024 // 4, dtype=torch.float32, pin_memory=True)
-        for step in range(iterations):
+        step = 0
+        while controller.should_continue():
             device = host.to(local_rank, non_blocking=True)
             returned = device.to("cpu", non_blocking=True)
             torch.cuda.synchronize(local_rank)
@@ -325,12 +352,15 @@ def _run_control(
                 checksum=float(returned[0]),
             )
             writer.emit("heartbeat", step=step)
+            controller.complete_iteration()
+            step += 1
     elif control == "model_load":
         checkpoint_path = writer.path.parent / f"rank-{writer.rank}-checkpoint.pt"
         seed_model = _tiny_model(torch, config)
         torch.save(seed_model.state_dict(), checkpoint_path)
         del seed_model
-        for step in range(iterations):
+        step = 0
+        while controller.should_continue():
             model = _tiny_model(torch, config)
             state = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
             model.load_state_dict(state)
@@ -344,6 +374,8 @@ def _run_control(
                 checkpoint_bytes=checkpoint_path.stat().st_size,
             )
             writer.emit("heartbeat", step=step)
+            controller.complete_iteration()
+            step += 1
     elif control == "peer_copy":
         supported = bool(torch.cuda.can_device_access_peer(0, 1))
         if not supported:
@@ -352,10 +384,11 @@ def _run_control(
                 control="peer_copy",
                 reason="CUDA peer access from GPU 0 to GPU 1 is unavailable",
             )
-            writer.emit("heartbeat", step=0)
+            raise RuntimeError("CUDA peer access from GPU 0 to GPU 1 is unavailable")
         else:
             element_count = int(config.get("payload_mib", 64)) * 1024 * 1024 // 4
-            for step in range(iterations):
+            step = 0
+            while controller.should_continue():
                 dist.barrier()
                 if writer.rank == 0:
                     source = torch.ones(element_count, dtype=torch.float32, device="cuda:0")
@@ -373,12 +406,18 @@ def _run_control(
                     )
                 dist.barrier()
                 writer.emit("heartbeat", step=step)
+                controller.complete_iteration()
+                step += 1
     elif control == "idle":
-        for step in range(iterations):
+        step = 0
+        while controller.should_continue():
             time.sleep(float(config.get("idle_interval_s", 0.25)))
             writer.emit("heartbeat", step=step)
+            controller.complete_iteration()
+            step += 1
     else:
         raise ValueError(f"unknown control {control!r}")
+    _emit_measurement_interval(writer, controller)
     dist.barrier()
 
 
@@ -391,7 +430,7 @@ def _run_calibration(
 ) -> None:
     collective = str(config.get("collective", "all_reduce"))
     payload_mib = int(config.get("payload_mib", 1))
-    burst_count = int(config.get("iterations", 20))
+    planned_burst_count = int(config.get("iterations", 20))
     collectives_per_burst = int(config.get("burst_iterations", 10))
     burst_interval_s = float(config.get("iteration_interval_s", 0.25))
     dtype = torch.float32
@@ -405,12 +444,14 @@ def _run_calibration(
         collective=collective,
         payload_mib=payload_mib,
         tensor_bytes=nominal_bytes,
-        planned_bursts=burst_count,
+        planned_bursts=planned_burst_count,
         collectives_per_burst=collectives_per_burst,
         burst_interval_s=burst_interval_s,
     )
     started = time.perf_counter()
-    for step in range(burst_count):
+    controller = _duration_controller(config)
+    step = 0
+    while controller.should_continue():
         burst_started = time.perf_counter()
         for _ in range(collectives_per_burst):
             if collective == "all_reduce":
@@ -466,8 +507,13 @@ def _run_calibration(
         remaining = burst_interval_s - (time.perf_counter() - burst_started)
         if remaining > 0:
             time.sleep(remaining)
+        controller.complete_iteration()
+        step += 1
     torch.cuda.synchronize(local_rank)
     elapsed = time.perf_counter() - started
+    interval = controller.finish()
+    burst_count = interval.iterations_completed
+    writer.emit("measurement_interval", **interval.to_dict())
     writer.emit(
         "collective_complete",
         collective=collective,
