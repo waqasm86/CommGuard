@@ -114,9 +114,16 @@ Acceptance: all available CPU, lint, format, build, import, CLI, notebook, secre
   failed-run claim boundary, and passed the full pre-commit gate: 169 CPU-safe
   tests passed, one optional scikit-learn test skipped, six hardware tests were
   deselected, Ruff check/format passed, and the 0.2.0 wheel/sdist built.
-- [ ] `2026-08-02` Complete fresh-wheel, delivery/path, distribution-content,
-  evidence-hash, and final Git checks; commit final records and push only the
-  feature branch.
+- [x] `2026-08-02` Completed fresh-wheel, delivery/path,
+  distribution-content, evidence-hash, notebook, and final Git checks. Version
+  0.2.0 imported from an isolated environment's `site-packages`; CLI help and
+  `pip check` passed; wheel/sdist contents were clean; all eight indexed
+  historical byte sizes and SHA-256 hashes matched; canonical notebooks were
+  deterministic and output-free; `git diff --check` and strict `git fsck`
+  passed (with only pre-existing unreachable blobs reported).
+- [ ] `2026-08-02` Push only
+  `codex/fix-calibration-idle-and-kaggle-workflow`, confirm its upstream/remote
+  URL, and leave merge/Kaggle execution to the human gates.
 
 - [x] `2026-08-02` Re-audited the authoritative checkout at completion commit
   `5ac130c322df7c1c9c359ae2d568d515c153d1b0`, verified the Git remote/history,
