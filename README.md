@@ -71,7 +71,16 @@ origin remote ref. It fetches that object, checks out detached HEAD, and rejects
 a dirty or unpushed checkout. Downstream notebooks also require the exact
 SHA-256 printed by their predecessor before safely restoring its archive.
 
+The calibration notebook records three idle repetitions and three AllReduce
+repetitions at 1, 4, 16, and 64 MiB. In the benign notebook, that restored
+calibration is explicitly prior-session input evidence; a fresh current-session
+calibration is the actual collection gate. Corpus, extraction, evaluation, and
+reporting paths verify the exact current calibration path, hash, session,
+environment, source commit, schema, and status rather than selecting a filename.
+
 Calibration can be `supported`, `partially_supported`, or `not_supported`.
+Historical schema-1 support is reported only under its legacy contract and is
+not treated as a pass of the new idle-aware gate.
 Between Kaggle sessions, download each notebook's exported evidence archive and
 upload it as a private Kaggle Dataset for the next notebook. See the
 [experiment roadmap](docs/NEXT_KAGGLE_EXPERIMENTS.md) for the artifact flow and

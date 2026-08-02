@@ -897,6 +897,7 @@ def run_matrix(
             store.root,
             prior_calibration_reference,
             require_current_session=False,
+            require_supported=False,
         )
         if prior_calibration_reference["calibration_relationship"] != "prior_session":
             raise CalibrationError("supplied prior calibration must be labeled prior_session")
@@ -930,7 +931,12 @@ def run_matrix(
         f"corpora/{context.corpus_id}-final.json",
         final_manifest.to_dict(),
     )
+    prior_extractions = set((store.root / "features").glob("extraction-*.json"))
     extraction = extract_feature_result(output, final_manifest, output=output)
+    new_extractions = set((store.root / "features").glob("extraction-*.json")) - prior_extractions
+    if len(new_extractions) != 1:
+        raise RuntimeError("benign matrix did not create exactly one extraction summary")
+    extraction_path = new_extractions.pop()
     try:
         coverage_gate = require_primary_coverage(
             extraction,
@@ -974,6 +980,7 @@ def run_matrix(
         "feature_valid": sum(values["feature_valid"] for values in family_summary.values()),
         "family_counts": family_summary,
         "feature_extraction": extraction.summary(),
+        "feature_extraction_summary": str(extraction_path.relative_to(store.root)),
         "primary_coverage_gate": coverage_gate,
         "detector_metrics_computed": False,
         "summary_artifact": summary_relative,

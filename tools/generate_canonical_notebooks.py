@@ -181,28 +181,23 @@ if ARTIFACTS.exists():
             "cal-run",
             """from commguard.orchestrator import run_calibration_sweep
 
-RUN_CALIBRATION_PILOT = True
-RUN_EXPANDED_CALIBRATION = False
-CALIBRATION = None
-if RUN_CALIBRATION_PILOT:
-    CALIBRATION = run_calibration_sweep(
-        output=ARTIFACTS,
-        payload_mib=(1, 16, 64),
-        repetitions=1,
-        timeout_s=180.0,
-        provenance=CONTEXT,
-    )
-if RUN_EXPANDED_CALIBRATION:
-    CALIBRATION = run_calibration_sweep(
-        output=ARTIFACTS,
-        payload_mib=(1, 4, 16, 64),
-        repetitions=3,
-        timeout_s=180.0,
-        provenance=CONTEXT,
-    )
-if CALIBRATION is None:
-    raise RuntimeError("Enable one calibration mode before export.")
-print({"status": CALIBRATION["status"], "observations": len(CALIBRATION["observations"])})
+RUN_STANDARD_CALIBRATION = True
+if not RUN_STANDARD_CALIBRATION:
+    raise RuntimeError("Enable the bounded standard calibration before export.")
+CALIBRATION = run_calibration_sweep(
+    output=ARTIFACTS,
+    payload_mib=(1, 4, 16, 64),
+    repetitions=3,
+    timeout_s=180.0,
+    provenance=CONTEXT,
+)
+print({
+    "status": CALIBRATION["status"],
+    "decision_state": CALIBRATION["decision_state"],
+    "idle_usable_repetitions": CALIBRATION["idle_baseline_usable_repetitions"],
+    "payload_summaries": CALIBRATION["payload_summaries"],
+    "exact_calibration_reference_for_next_notebook": CALIBRATION["reference"],
+})
 """,
         ),
         markdown(
@@ -222,9 +217,10 @@ def benign_notebook() -> list[dict[str, object]]:
         markdown(
             "benign-title",
             "# CommGuard benign corpus v2\n\n"
-            "Restore a hash-pinned supported calibration artifact, run a bounded pilot by "
-            "default, and preserve coverage before any detector evaluation. The standard "
-            "24-run corpus is an explicit opt-in.\n",
+            "Restore one exact prior-session calibration as input evidence, then run a fresh "
+            "current-session calibration as the actual collection gate. The two artifacts are "
+            "never interchangeable. A bounded pilot is the default and the standard 24-run "
+            "corpus is an explicit opt-in.\n",
         ),
         code("benign-source", source_setup("commguard_benign_corpus_v2")),
         code(
@@ -234,16 +230,38 @@ def benign_notebook() -> list[dict[str, object]]:
         code("benign-context", context_cell("commguard_benign_corpus_v2", "benign-v2", True)),
         code(
             "benign-gate",
-            """import json
+            """from commguard.artifacts import sha256_file
+from commguard.calibration import build_calibration_reference, verify_calibration_reference
 
-calibration_paths = sorted((ARTIFACTS / "results").glob("calibration-*.json"))
-if not calibration_paths:
-    raise RuntimeError("The restored archive has no calibration result.")
-INPUT_CALIBRATION = json.loads(calibration_paths[-1].read_text(encoding="utf-8"))
-if INPUT_CALIBRATION.get("status") != "supported":
-    status = INPUT_CALIBRATION.get("status")
-    raise RuntimeError(f"Benign collection blocked by calibration={{status}}")
-print({"accepted_calibration": str(calibration_paths[-1]), "status": "supported"})
+PRIOR_CALIBRATION_ARTIFACT_PATH = Path("results/calibration-REPLACE.json")
+EXPECTED_PRIOR_CALIBRATION_SHA256 = ""  # Copy from calibration_v3 output.
+if not re.fullmatch(r"[0-9a-f]{64}", EXPECTED_PRIOR_CALIBRATION_SHA256):
+    raise RuntimeError("Set the exact prior calibration artifact SHA-256.")
+if PRIOR_CALIBRATION_ARTIFACT_PATH.is_absolute() or ".." in PRIOR_CALIBRATION_ARTIFACT_PATH.parts:
+    raise RuntimeError("Prior calibration path must be artifact-root-relative.")
+prior_path = ARTIFACTS / PRIOR_CALIBRATION_ARTIFACT_PATH
+if not prior_path.is_file():
+    raise RuntimeError(f"Exact prior calibration is missing: {PRIOR_CALIBRATION_ARTIFACT_PATH}")
+if sha256_file(prior_path) != EXPECTED_PRIOR_CALIBRATION_SHA256:
+    raise RuntimeError("Exact prior calibration artifact hash does not match.")
+PRIOR_CALIBRATION_REFERENCE = build_calibration_reference(
+    ARTIFACTS,
+    PRIOR_CALIBRATION_ARTIFACT_PATH,
+    current_experiment_session_id=CONTEXT.experiment_session_id,
+)
+if PRIOR_CALIBRATION_REFERENCE["calibration_relationship"] != "prior_session":
+    raise RuntimeError("Restored calibration must be labeled prior-session input evidence.")
+_, PRIOR_CALIBRATION = verify_calibration_reference(
+    ARTIFACTS,
+    PRIOR_CALIBRATION_REFERENCE,
+    require_current_session=False,
+    require_supported=False,
+)
+print({
+    "prior_session_calibration_reference": PRIOR_CALIBRATION_REFERENCE,
+    "prior_status_under_its_saved_contract": PRIOR_CALIBRATION["status"],
+    "used_as_current_collection_gate": False,
+})
 """,
         ),
         code(
@@ -271,7 +289,19 @@ MATRIX = run_matrix(
     repetitions=REPETITIONS,
     timeout_s=180.0,
     provenance=CONTEXT,
+    prior_calibration_reference=PRIOR_CALIBRATION_REFERENCE,
 )
+CURRENT_CALIBRATION_REFERENCE = MATRIX["calibration_reference"]
+if CURRENT_CALIBRATION_REFERENCE["calibration_relationship"] != "current_session":
+    raise RuntimeError("Fresh collection calibration was not labeled current_session.")
+if CURRENT_CALIBRATION_REFERENCE == PRIOR_CALIBRATION_REFERENCE:
+    raise RuntimeError("Prior and current calibration references must not be interchangeable.")
+print({
+    "prior_session_input_calibration": PRIOR_CALIBRATION_REFERENCE,
+    "current_session_gating_calibration": CURRENT_CALIBRATION_REFERENCE,
+    "benign_matrix_summary_path_for_next_notebook": MATRIX["summary_artifact"],
+    "feature_extraction_summary_for_next_notebook": MATRIX["feature_extraction_summary"],
+})
 """,
         ),
         code(
@@ -323,7 +353,8 @@ def detector_notebook() -> list[dict[str, object]]:
         ),
         code(
             "detector-coverage",
-            """from collections import Counter
+            """import json
+from collections import Counter
 
 from commguard.features import (
     PRIMARY_BENIGN_FAMILIES,
@@ -331,8 +362,17 @@ from commguard.features import (
     require_primary_coverage,
 )
 
-BENIGN_EXTRACTION_SUMMARY = sorted((ARTIFACTS / "features").glob("extraction-*.json"))[-1]
+BENIGN_MATRIX_SUMMARY_PATH = Path("results/matrix-REPLACE.json")
+if BENIGN_MATRIX_SUMMARY_PATH.is_absolute() or ".." in BENIGN_MATRIX_SUMMARY_PATH.parts:
+    raise RuntimeError("Benign matrix summary path must be artifact-root-relative.")
+matrix_summary_path = ARTIFACTS / BENIGN_MATRIX_SUMMARY_PATH
+if not matrix_summary_path.is_file():
+    raise RuntimeError(f"Exact benign matrix summary is missing: {BENIGN_MATRIX_SUMMARY_PATH}")
+BENIGN_MATRIX_SUMMARY = json.loads(matrix_summary_path.read_text(encoding="utf-8"))
+BENIGN_EXTRACTION_SUMMARY = Path(BENIGN_MATRIX_SUMMARY["feature_extraction_summary"])
 BENIGN_EXTRACTION = load_extraction_result(ARTIFACTS, BENIGN_EXTRACTION_SUMMARY)
+if BENIGN_EXTRACTION.calibration_reference != BENIGN_MATRIX_SUMMARY["calibration_reference"]:
+    raise RuntimeError("Benign extraction and matrix calibration references differ.")
 coverage_by_family = {}
 for family in PRIMARY_BENIGN_FAMILIES:
     records = [record for record in BENIGN_EXTRACTION.coverage if record.workload_family == family]
@@ -371,6 +411,8 @@ print({
     "primary_communication_only": EVALUATION["primary_communication_only"],
     "coverage_gate": EVALUATION["coverage_gate"],
     "warnings": EVALUATION["warnings"],
+    "exact_calibration_reference": EVALUATION["calibration_reference"],
+    "evaluation_artifact_for_next_notebook": EVALUATION["result_artifact"],
 })
 """,
         ),
@@ -414,10 +456,13 @@ def adversarial_notebook() -> list[dict[str, object]]:
             "adversarial-gate",
             """import json
 
-evaluation_paths = sorted((ARTIFACTS / "results").glob("evaluation-*.json"))
-if not evaluation_paths:
-    raise RuntimeError("Adversarial work requires a saved benign acceptance evaluation.")
-BENIGN_ACCEPTANCE = json.loads(evaluation_paths[-1].read_text(encoding="utf-8"))
+BENIGN_EVALUATION_ARTIFACT_PATH = Path("results/evaluation-REPLACE.json")
+if BENIGN_EVALUATION_ARTIFACT_PATH.is_absolute() or ".." in BENIGN_EVALUATION_ARTIFACT_PATH.parts:
+    raise RuntimeError("Benign evaluation path must be artifact-root-relative.")
+benign_evaluation_path = ARTIFACTS / BENIGN_EVALUATION_ARTIFACT_PATH
+if not benign_evaluation_path.is_file():
+    raise RuntimeError("Adversarial work requires the exact saved benign evaluation.")
+BENIGN_ACCEPTANCE = json.loads(benign_evaluation_path.read_text(encoding="utf-8"))
 if not BENIGN_ACCEPTANCE.get("coverage_gate", {}).get("passed"):
     raise RuntimeError("Adversarial work blocked: benign primary coverage did not pass.")
 if not BENIGN_ACCEPTANCE.get("primary_communication_only"):
@@ -430,7 +475,7 @@ if BENIGN_EXTRACTION_SUMMARY.is_absolute():
             "Cannot resolve the benign extraction summary inside the restored archive."
         )
     BENIGN_EXTRACTION_SUMMARY = matches[0].relative_to(ARTIFACTS)
-print({"accepted_benign_evaluation": str(evaluation_paths[-1]), "coverage": "passed"})
+print({"accepted_benign_evaluation": str(benign_evaluation_path), "coverage": "passed"})
 """,
         ),
         code(

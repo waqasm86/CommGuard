@@ -30,6 +30,14 @@ dirty or not visible from a remote ref. Each downstream notebook also requires
 the exact SHA-256 printed by its predecessor and restores the archive through
 the SDK's create-only, traversal/link-rejecting loader.
 
+The committed `REVIEWED_COMMIT` value remains an explicit placeholder until the
+reviewed feature branch is pushed. Calibration uses three idle repetitions plus
+three repetitions at 1, 4, 16, and 64 MiB. The benign notebook records the
+restored calibration as prior-session evidence and binds its corpus to a fresh
+current-session calibration. Later notebooks consume the exact matrix,
+extraction, calibration, and evaluation paths printed by their predecessor;
+they never choose a calibration by filename order.
+
 ## Executed evidence
 
 Executed notebooks are evidence/release artifacts, not editable source. They

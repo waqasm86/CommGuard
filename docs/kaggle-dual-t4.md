@@ -19,6 +19,18 @@ The notebook rejects mutable branch-only installation, dirty source, detached
 commits that are not contained by a remote ref, archive hash mismatches, and
 restore destinations that already exist.
 
+Leave the committed placeholder empty until the reviewed feature branch has
+been pushed, then insert that pushed commit's full SHA into all four notebooks.
+The calibration notebook runs the bounded idle-aware 3 × (idle + 1/4/16/64 MiB)
+matrix. Copy its exact calibration artifact path and SHA-256, not merely the
+archive name, into the benign notebook.
+
+The benign notebook labels the restored calibration as prior-session input and
+runs a fresh current-session calibration as its actual gate. It prints the exact
+matrix and extraction-summary paths for the detector notebook. Detector fitting
+verifies the corpus-bound current calibration and stops before model work if
+the required eight-family 30-second coverage is incomplete.
+
 Strict preflight must observe exactly two T4 devices, CUDA, and NCCL before any
 dual-GPU experiment is launched. Installation does not establish GPU readiness.
 

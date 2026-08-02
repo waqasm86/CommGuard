@@ -2,7 +2,7 @@
 
 ## Status
 
-This is a CPU-tested local reference architecture. It has not been deployed or
+This central server is a CPU-tested local reference implementation. It has not been deployed or
 validated across physical GPU nodes. No current result supports a multi-node,
 server-grade, latency, availability, or detector-performance claim.
 

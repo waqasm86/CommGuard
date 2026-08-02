@@ -12,6 +12,12 @@ Status as of the local SDK build:
   duplicates, links, special members, and configured size/member overages.
 - CPU-safe offline tests for schemas, artifacts, fake telemetry, calibration,
   features, grouping/leakage, rank evidence, preflight parsing, and reporting.
+- Idle-aware calibration policy with three idle and three per-payload
+  repetitions, deterministic capture/monotonicity/dynamic-range decisions, and
+  explicit legacy compatibility that cannot satisfy the modern gate.
+- Hash-bound calibration provenance through final corpus, extraction,
+  evaluation, and reporting artifacts; ambiguous filename-order selection is
+  rejected.
 - Strict rejection of CPU/one-GPU/non-T4 execution for dual-T4 results.
 - Torchrun command uses two workers, NCCL-only worker checks, unique rendezvous
   port, timeout/process-group cleanup, rank event evidence, and rank stream logs.
@@ -29,7 +35,8 @@ Status as of the local SDK build:
   families, and duration-cost reporting.
 - Four deterministic canonical notebooks are orchestration-only, install a
   clean remote-visible detached commit with `--no-deps`, chain exact archive
-  hashes, and remain unexecuted in Git.
+  hashes and artifact paths, distinguish prior/current calibration, and remain
+  unexecuted in Git.
 
 ## Historical Kaggle evidence, below current acceptance
 

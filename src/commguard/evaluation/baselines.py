@@ -871,7 +871,9 @@ def evaluate_detector(
         store = ArtifactStore(output)
         store.initialize()
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-        store.write_json(f"results/evaluation-{stamp}.json", result)
+        result_artifact = f"results/evaluation-{stamp}.json"
+        result["result_artifact"] = result_artifact
+        store.write_json(result_artifact, result)
         split_rows = [
             {
                 "artifact_kind": "split_assignment",

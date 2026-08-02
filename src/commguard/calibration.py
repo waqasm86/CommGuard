@@ -469,6 +469,7 @@ def verify_calibration_reference(
     expected_source_commits: set[str] | None = None,
     require_current_session: bool = True,
     allow_legacy: bool = False,
+    require_supported: bool = True,
 ) -> tuple[Path, dict[str, Any]]:
     """Load one exact calibration and verify its authenticated provenance fields."""
     missing = [name for name in CALIBRATION_REFERENCE_FIELDS if name not in reference]
@@ -516,12 +517,14 @@ def verify_calibration_reference(
             f"modern evaluation requires calibration schema {CURRENT_SCHEMA_VERSION}; "
             f"observed={schema_version}"
         )
-    if calibration.get("status") != "supported":
+    if require_supported and calibration.get("status") != "supported":
         raise CalibrationError(
             f"referenced calibration is not supported: {calibration.get('status')}"
         )
-    if schema_version == CURRENT_SCHEMA_VERSION and not calibration.get(
-        "modern_capture_gate_passed"
+    if (
+        require_supported
+        and schema_version == CURRENT_SCHEMA_VERSION
+        and not calibration.get("modern_capture_gate_passed")
     ):
         raise CalibrationError("modern calibration did not pass the idle-aware capture gate")
     relationship = str(reference["calibration_relationship"])

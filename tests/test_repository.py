@@ -80,6 +80,25 @@ def test_canonical_notebook_inventory_is_valid_and_unexecuted() -> None:
     assert "RUN_ADVERSARIAL_PILOT = False" in adversarial
     assert "ADVERSARIAL_HUMAN_APPROVAL = False" in adversarial
 
+    calibration = (notebook_root / names[0]).read_text(encoding="utf-8")
+    assert "payload_mib=(1, 4, 16, 64)" in calibration
+    assert "repetitions=3" in calibration
+    assert "idle_usable_repetitions" in calibration
+    assert "exact_calibration_reference_for_next_notebook" in calibration
+
+    benign = (notebook_root / names[1]).read_text(encoding="utf-8")
+    assert "PRIOR_CALIBRATION_ARTIFACT_PATH" in benign
+    assert "EXPECTED_PRIOR_CALIBRATION_SHA256" in benign
+    assert "prior_session_calibration_reference" in benign
+    assert "current_session_gating_calibration" in benign
+    assert "prior_calibration_reference=PRIOR_CALIBRATION_REFERENCE" in benign
+    assert "calibration_paths = sorted" not in benign
+
+    detector = (notebook_root / names[2]).read_text(encoding="utf-8")
+    assert "BENIGN_MATRIX_SUMMARY_PATH" in detector
+    assert "BENIGN_EXTRACTION.calibration_reference" in detector
+    assert 'glob("extraction-*' not in detector
+
 
 def test_canonical_notebooks_match_their_generator() -> None:
     result = subprocess.run(
@@ -178,6 +197,23 @@ def test_evidence_docs_preserve_the_negative_result_and_archive_hashes() -> None
     assert "@main" not in readme
     assert "100% training detection" not in readme.lower()
     assert "not executed" in report
+
+
+def test_public_claim_boundaries_remain_explicit() -> None:
+    current = (ROOT / "docs/current-results.md").read_text(encoding="utf-8")
+    limitations = (ROOT / "docs/limitations.md").read_text(encoding="utf-8")
+    adversarial = (ROOT / "docs/adversarial-research.md").read_text(encoding="utf-8")
+    central = (ROOT / "docs/central-monitoring-design.md").read_text(encoding="utf-8")
+
+    assert "DDP versus idle" in current
+    assert "the only training test run was missed" in current
+    assert "tiny DDP-versus-idle diagnostic" in current
+    assert "No new dual-T4 or adversarial run exists yet" in limitations
+    assert "Physical multi-node validation" in limitations
+    assert "pending" in limitations
+    assert "reliable training-versus-inference detection" in limitations
+    assert "No adversarial GPU workload or detector result was executed" in adversarial
+    assert "reference implementation" in central
 
 
 def test_local_markdown_links_resolve() -> None:
