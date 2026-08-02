@@ -11,11 +11,13 @@ bounded plan. Final family/session/configuration holdouts start sealed. See
 [`adversarial-research.md`](adversarial-research.md) for strategy limits and
 correctness/claim requirements.
 
-All reporting uses four claim classes:
+Reporting uses explicit claim classes:
 
-- **Observed:** directly present in saved artifacts from the stated hardware.
-- **Inferred:** supported by those observations and the stated analysis.
-- **Hypothesized:** proposed for future experiments, not measured here.
+- **Measured:** directly present in an indexed saved artifact.
+- **Derived:** computed from named immutable inputs under a stated method.
+- **Observed limitation:** an evidence-backed failure or scope restriction.
+- **Hypothesis/planned:** proposed future work, not measured here.
+- **Pending hardware validation:** implemented but not executed on suitable hardware.
 - **Out of scope:** production security, privacy guarantees, frontier clusters,
   NVSwitch, RoCE/InfiniBand, multi-node behavior, determined operators, and
   treaty-grade verification.
@@ -34,3 +36,8 @@ SPAR application free-response text is outside this repository's purpose.
 CommGuard documentation and reports describe only technical repository
 behavior and measurements; they must not be repurposed as AI-written
 application answers.
+
+Numerical statements in README and reports must resolve to an entry in
+[`evidence-index.md`](evidence-index.md). An executed notebook alone is not a
+claim source unless its archive hash, source identity, status, and supported
+claim are indexed.

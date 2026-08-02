@@ -97,3 +97,9 @@ declared session/configuration IDs untouched through development and hardening.
 Training variants report evasion with duration/throughput/loss/memory/sync and
 communication proxies, while the synthetic non-training decoy reports false
 positives. See [bounded adversarial research](adversarial-research.md).
+
+The method is adapted from the locally supplied literature, especially the
+broad telemetry/adversarial evaluation structure of Rahman and Tajdari and the
+communication-structuring questions of Seferis and Fist. CommGuard does not
+import their empirical results. Full attribution and scope differences are in
+[`references.md`](references.md).

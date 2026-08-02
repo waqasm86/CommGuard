@@ -60,3 +60,10 @@ CPU tests simulate two agents, aggregation, a decision, replay, stale sequence,
 bad HMAC, bad batch chaining, oversized payload, unknown protocol, prohibited
 fields, clock skew, buffered transport failure, and node loss. They do not
 exercise sockets, TLS, multiple hosts, GPUs, or real detector models.
+
+Before a physical pilot, an operator must specify node/workload identity,
+secret provisioning and rotation, TLS termination and peer verification,
+durable replay/sequence state, queue backpressure, synchronized-clock alerting,
+retention/deletion policy, role-based evidence access, GPU-to-NIC attribution,
+failure recovery, and an independent security/reliability review. These are
+deployment prerequisites, not features validated by the local simulation.

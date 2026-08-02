@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -96,6 +97,42 @@ def test_core_install_has_no_forced_dependencies() -> None:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text())
     assert project["project"]["name"] == "commguard"
     assert project["project"]["dependencies"] == []
+
+
+def test_evidence_docs_preserve_the_negative_result_and_archive_hashes() -> None:
+    evidence = (ROOT / "docs/evidence-index.md").read_text(encoding="utf-8")
+    current = (ROOT / "docs/current-results.md").read_text(encoding="utf-8")
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    report = (ROOT / "reports/research-report-template.md").read_text(encoding="utf-8")
+    expected_hashes = {
+        "0d52977b0db40bc06bf29155332ebdd48e581d0de063fd6930db42c8500ed70f",
+        "946184076a7fdf6c71b2dd1bcd60d98d34dd63a52e020d399ebe044d73c7d660",
+        "2460a44a2100d024bef6176aadd85cf9c57e343e7d3301c2dfc321acd99de48a",
+        "13f0122997ac4127a6d45c032d5a2806d57e60f107e85e004f17b5f3e4308cc6",
+        "840fbb6fd8860c3768dc98968e4c5d0c9ad96db4b8b04fe97e228274e34dc07d",
+    }
+
+    assert all(digest in evidence for digest in expected_hashes)
+    assert "DDP versus idle" in current
+    assert "training recall was 0" in report
+    assert "reliable training-versus-inference detection" in readme
+    assert "@main" not in readme
+    assert "100% training detection" not in readme.lower()
+    assert "not executed" in report
+
+
+def test_local_markdown_links_resolve() -> None:
+    markdown_paths = [ROOT / "README.md", *sorted((ROOT / "docs").glob("*.md"))]
+    markdown_paths.extend(sorted((ROOT / "reports").glob("*.md")))
+    for source_path in markdown_paths:
+        source = source_path.read_text(encoding="utf-8")
+        for target in re.findall(r"\[[^]]+\]\(([^)]+)\)", source):
+            if target.startswith(("https://", "http://", "mailto:", "#")):
+                continue
+            relative = target.split("#", 1)[0]
+            assert (source_path.parent / relative).resolve().exists(), (
+                f"broken local link in {source_path.relative_to(ROOT)}: {target}"
+            )
 
 
 def test_workload_matrix_includes_required_families() -> None:

@@ -71,6 +71,12 @@ selection remains the default; a deliberately combined benign/adversarial
 corpus may request both without relabeling either designation. Calibration
 remains excluded unless it is separately and explicitly selected.
 
+Loaders can bind an exact extraction-summary path within an artifact root. This
+prevents a later adversarial extraction from silently replacing the benign
+coverage source merely because it has the newest timestamp. Evaluation applies
+the primary gate to the explicitly selected benign extraction and may append a
+separate adversarial-only extraction only for frozen robustness scoring.
+
 ## Split and evaluation artifacts
 
 A split plan records the requested mode, actual strategy, deterministic seed,

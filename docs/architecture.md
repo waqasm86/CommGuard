@@ -16,8 +16,10 @@ CommGuard separates:
     node health, aggregation, and a detector decision interface.
 11. `reporting`: reports generated only from validated saved artifacts.
 
-The notebook calls public APIs and CLI commands; it contains no SDK
-implementation. Main integrations use a fresh `torchrun` subprocess so notebook
+The notebooks call public APIs and CLI commands; they contain no SDK
+implementation. Canonical notebooks form an immutable archive/hash chain and
+bind exact extraction summaries when benign and adversarial evidence share an
+artifact root. Main integrations use a fresh `torchrun` subprocess so notebook
 CUDA state cannot contaminate workers. Every rank binds its local device before
 tensor allocation, requires NCCL, emits identity/evidence records, and destroys
 the process group in `finally`.
@@ -42,3 +44,9 @@ replay state, and batch chaining before retaining samples. It aligns accepted
 samples by UTC windows, reports missing/stale nodes, and forces detector
 abstention on incomplete windows. See
 [`central-monitoring-design.md`](central-monitoring-design.md).
+
+The local central simulation leaves physical assumptions unresolved: hosts need
+verified workload identity, independently managed secrets, TLS termination,
+durable replay state, bounded queues, synchronized UTC clocks, retention and
+access controls, and GPU/NIC attribution appropriate to the real topology.
+None of these assumptions is converted into a measured deployment claim.
