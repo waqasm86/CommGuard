@@ -19,6 +19,11 @@ ship a validated detector or new GPU results.
   cost proxies, and a sealed family/session/configuration holdout.
 - Four deterministic, output-free Kaggle notebooks pinned to clean
   remote-visible commits and immutable archive hashes.
+- Idle-aware three-repetition calibration at 1/4/16/64 MiB, with explicit
+  current-versus-prior session labels and exact downstream artifact binding.
+- Idempotent central acknowledgment-loss retries that do not double-ingest an
+  identical authenticated batch, while changed content remains rejected.
+- Numerically stable simple-rule probabilities for extreme detector logits.
 - Evidence index, negative historical coverage analysis, report template, and
   complete citations/claim boundaries.
 
@@ -27,7 +32,7 @@ ship a validated detector or new GPU results.
 - Core remains dependency-free and importable on CPU-only Python 3.10/3.11.
 - Analysis, telemetry, and development dependencies remain optional extras.
 - Historical schema-1 artifacts remain readable; raw evidence is never changed
-  in place.
+  in place or reinterpreted as passing the modern calibration gate.
 
 ## Known limitations
 
@@ -36,3 +41,4 @@ ship a validated detector or new GPU results.
 - Historical detector evidence is DDP versus idle only and does not pass the
   current 30-second eight-family gate.
 - No adversarial or physical multi-node result is included.
+- No new Kaggle or dual-T4 run is included; canonical notebooks are unexecuted.

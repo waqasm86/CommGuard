@@ -21,7 +21,7 @@ jobs:
       - name: Install project and test tools
         run: |
           python -m pip install --upgrade pip setuptools
-          python -m pip install --no-build-isolation --no-deps -e .
+          python -m pip install --no-build-isolation -e ".[analysis]"
           python -m pip install "build>=1.2" "pytest>=8" "ruff>=0.9" "tomli>=2; python_version < '3.11'"
       - name: Lint and format
         run: |
@@ -29,5 +29,9 @@ jobs:
           ruff format --check .
       - name: CPU-safe tests
         run: pytest -m "not gpu and not multigpu and not network and not slow"
+      - name: Canonical notebook policy
+        run: python tools/generate_canonical_notebooks.py --check
+      - name: Public delivery safety scan
+        run: python tools/verify_delivery.py
       - name: Build wheel and source distribution
         run: python -m build

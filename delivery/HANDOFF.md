@@ -3,7 +3,7 @@
 ## Inspect locally
 
 ```bash
-git switch codex/commguard-research-completion
+git switch codex/commguard-pre-kaggle-audit-fixes
 git status --short --branch
 git log --oneline origin/main..HEAD
 git diff --check origin/main...HEAD
@@ -14,16 +14,16 @@ Expected state before push: the branch is ahead of `origin/main`, the worktree
 is clean, delivery checks pass, and no ignored archive/evidence file appears in
 the tracked diff.
 
-## Push only after explicit approval
+## Feature-branch publication
 
 The exact command is:
 
 ```bash
-git push -u origin codex/commguard-research-completion
+git push -u origin codex/commguard-pre-kaggle-audit-fixes
 ```
 
-Codex did not run this command. `ALLOW_GIT_PUSH` was not used. After pushing,
-record the immutable reviewed commit for Kaggle:
+Never push or merge `main`, and never force-push. After the feature branch is
+pushed, record the immutable reviewed commit for Kaggle:
 
 ```bash
 git rev-parse HEAD
@@ -44,6 +44,12 @@ Set the same pushed 40-character `REVIEWED_COMMIT` in every notebook. For each
 downstream notebook, upload the preceding archive unchanged as a private Kaggle
 Dataset, set the exact `INPUT_ARCHIVE`, and copy the printed SHA-256 into
 `EXPECTED_INPUT_SHA256`.
+
+The calibration notebook is the first hardware gate: it runs three idle
+repetitions plus three AllReduce repetitions at 1, 4, 16, and 64 MiB. The
+benign notebook labels the restored calibration as prior-session evidence and
+runs a fresh calibration as its exact current-session collection gate. Do not
+substitute either artifact for the other.
 
 Expected output patterns:
 

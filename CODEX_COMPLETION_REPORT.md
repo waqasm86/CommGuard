@@ -1,10 +1,8 @@
-# CommGuard research-completion report
+# CommGuard research-completion and pre-Kaggle audit report
 
 Completed locally: 2026-08-02 (Asia/Karachi)
 
-Branch: `codex/commguard-research-completion`
-
-Push status: **not pushed; explicit human authorization is still required**
+Branch: `codex/commguard-pre-kaggle-audit-fixes`
 
 ## Outcome
 
@@ -12,7 +10,10 @@ The repository is now a CPU-verifiable research SDK and reproducible dual-T4
 experiment workflow. It has explicit provenance/corpus/session semantics,
 coverage-first features, leakage-resistant evaluation, a local central-monitoring
 reference, bounded benign/adversarial workloads, four canonical Kaggle notebooks,
-and evidence-grounded reporting. Package metadata is `0.2.0`.
+and evidence-grounded reporting. The pre-Kaggle audit additionally requires an
+idle-aware repeated calibration gate, binds all downstream artifacts to its
+exact provenance, makes central retry acknowledgments idempotent, and stabilizes
+extreme detector logits. Package metadata is `0.2.0`.
 
 No new GPU, Kaggle, adversarial, detector-performance, or physical multi-node
 result was produced. The indexed historical result remains negative: usable
@@ -34,6 +35,11 @@ training run. See [`docs/current-results.md`](docs/current-results.md).
 | 09 | `3d940d4` | evidence boundaries and current-results reporting |
 | 10 | commit containing this report | final validation, version, and handoff |
 
+The pre-Kaggle audit adds six focused commits on top of the completion branch:
+public-state sanitization, calibration/provenance enforcement, central retry
+idempotency, numerical stability, canonical notebook/claim updates, and final
+delivery validation.
+
 The living implementation/audit record is
 [`commguard-research-completion.md`](.agent/execplans/commguard-research-completion.md).
 
@@ -43,7 +49,7 @@ Run with the project virtual environment:
 
 | Check | Result |
 |---|---|
-| `python -m pytest -m 'not gpu and not multigpu'` | 129 passed, one optional scikit-learn test skipped, five hardware tests deselected |
+| `python -m pytest -m 'not gpu and not multigpu'` | 147 passed, one optional scikit-learn test skipped, five hardware tests deselected |
 | `python -m ruff check .` | passed |
 | `python -m ruff format --check .` | passed |
 | `python -m build` | `commguard-0.2.0` wheel and sdist built |
@@ -71,15 +77,18 @@ was truthfully skipped rather than changing the environment.
 
 ## Remaining human/hardware gates
 
-1. Review the branch and authorize the push if appropriate.
-2. Push the reviewed commit so canonical notebooks can prove it is remote-visible.
-3. Run calibration and the duration-valid 24-run benign matrix on Kaggle T4 x2.
-4. Continue to detector evaluation only if the eight-family primary coverage
+1. Review the pushed pre-Kaggle audit branch.
+2. Insert its final remote-visible 40-character commit SHA as `REVIEWED_COMMIT`
+   in all four canonical notebooks.
+3. Run `commguard_calibration_v3.ipynb` first on Kaggle T4 x2, then continue
+   only if its new idle-aware repeated capture gate is supported.
+4. Run the duration-valid 24-run benign matrix on Kaggle T4 x2.
+5. Continue to detector evaluation only if the eight-family primary coverage
    artifact passes.
-5. Obtain separate human approval before enabling bounded adversarial execution.
-6. Keep the final adversarial family/session/configuration holdout sealed unless
+6. Obtain separate human approval before enabling bounded adversarial execution.
+7. Keep the final adversarial family/session/configuration holdout sealed unless
    separately approved for release.
-7. Treat physical multi-node deployment as pending new architecture/security
+8. Treat physical multi-node deployment as pending new architecture/security
    review and hardware evidence.
 
 Exact push and Kaggle handoff commands are in

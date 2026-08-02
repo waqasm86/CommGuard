@@ -98,6 +98,30 @@ Acceptance: all available CPU, lint, format, build, import, CLI, notebook, secre
 
 ## Progress log
 
+- [x] `2026-08-02` Re-audited the authoritative checkout at completion commit
+  `5ac130c322df7c1c9c359ae2d568d515c153d1b0`, verified the Git remote/history,
+  created `codex/commguard-pre-kaggle-audit-fixes`, and preserved all immutable
+  historical evidence.
+- [x] `2026-08-02` Removed tracked `.agent/state/` captures from the public
+  branch, ignored future state captures, and made the delivery scanner reject
+  personal home/media paths consistently without a directory exemption.
+- [x] `2026-08-02` Added schema-2 idle-aware repeated calibration and exact
+  calibration references through corpus extraction, evaluation, and reporting;
+  schema-1 evidence remains explicitly legacy and is not upgraded to a modern
+  gate pass.
+- [x] `2026-08-02` Made exact authenticated central batch retries idempotent,
+  rejected altered content under reused message IDs, and stabilized sigmoid
+  probabilities for extreme logits.
+- [x] `2026-08-02` Regenerated all four canonical notebooks with exact artifact
+  chaining and the final pushed-commit placeholder, strengthened public claim
+  checks, and retained the adversarial human-authorization gate.
+- [x] `2026-08-02` Final pre-Kaggle local validation: 147 CPU-safe tests passed,
+  one optional scikit-learn integration skipped, five hardware tests were
+  deselected, Ruff check/format passed, deterministic notebook regeneration and
+  delivery scans passed, clean wheel/sdist builds passed, and a fresh isolated
+  wheel install imported version 0.2.0 and passed CLI/dependency checks. All
+  eight indexed historical evidence hashes and byte counts remained unchanged.
+
 - [x] `2026-08-02T12:50:25+05:00` Read the completion package in the required order: master prompt, package `AGENTS.md`, plan rules, seven context files, acceptance YAML, experiment CSV, and phases 00–10.
 - [x] `2026-08-02T12:50:25+05:00` Confirmed live path/Git root, branch, HEAD, remotes, history, status, diff, and untracked paths.
 - [x] `2026-08-02T12:50:25+05:00` Audited repository configuration, docs, source, tests, notebook sources/metadata, archive member names/hashes, and extracted evidence manifests/summaries without modifying evidence.
@@ -133,6 +157,15 @@ Acceptance: all available CPU, lint, format, build, import, CLI, notebook, secre
 - [x] `2026-08-02` Phase 10 acceptance: 129 CPU-safe tests passed, one optional scikit-learn integration test skipped, and five hardware tests were deselected. Ruff check/format and wheel/sdist build passed; a fresh isolated environment installed/imported the wheel and ran its CLI; package metadata, dependency health, canonical notebook regeneration/output policy, Markdown links, diff whitespace, and delivery secret/path/archive/cache/symlink/size policy passed. Local Python is 3.11.15; Python 3.10 remains configured in CI because no 3.10 interpreter is installed on this host.
 
 ## Decision log
+
+- `2026-08-02`: New schema-2 calibration support requires at least three idle
+  and per-payload repetitions, a capture threshold relative to idle, adequate
+  per-payload capture, correlation, and dynamic range. Legacy schema-1 support
+  is readable only through explicitly labeled compatibility metadata.
+- `2026-08-02`: A restored calibration may be prior-session input evidence,
+  but the benign matrix must create and hash a fresh current-session supported
+  calibration as its collection gate. Downstream consumers never choose the
+  lexicographically latest filename.
 
 - `2026-08-02`: Treat the hyphen-named executed notebooks as immutable local evidence, not canonical source. Their hashes and outputs must be preserved; new canonical notebooks will use underscore names and contain no outputs.
 - `2026-08-02`: Treat `environment_fingerprint` as an environment description only. Existing per-run values will be loaded as legacy ambiguous grouping, never silently upgraded into true session IDs.
@@ -274,6 +307,14 @@ and sdist build, clean-environment wheel import/CLI, dependency health, notebook
 generation/output checks, documentation links, and delivery policy scans pass.
 The branch is prepared for human review but intentionally remains unpushed.
 
+Pre-Kaggle audit validation update: the full CPU-safe suite now has 147 passes,
+one optional analysis skip, and five hardware deselections. GitHub CI installs
+the optional analysis extra on Python 3.10 and 3.11 so that integration path is
+exercised there. Local compile, Ruff, notebook policy/regeneration, delivery and
+path scanning, clean package build, isolated-wheel import/CLI/dependency checks,
+distribution-content inspection, diff checks, and evidence-hash verification
+pass. No GPU, Kaggle, adversarial, or physical multi-node execution occurred.
+
 ## Recovery and idempotence
 
 - Never use Git reset, clean, force checkout, history rewrite, or force push.
@@ -285,10 +326,11 @@ The branch is prepared for human review but intentionally remains unpushed.
 
 ## Artifacts
 
-- `.agent/state/20260802T125025+0500/baseline.md` — authoritative pre-change inventory, SHA-256 `38a8c7857c4475e90936620dd7a579c126c7043638c9f9ea12bda7c219309aab`.
-- `.agent/state/20260802T084010Z/baseline.md` — authoritative resumption inventory after Phase 01 and before continued Phase 02 edits.
 - `.agent/execplans/commguard-research-completion.md` — this living plan (hash changes as the plan evolves).
-- Existing evidence archive hashes are recorded in the baseline; raw archives are intentionally not copied or modified.
+- The former tracked `.agent/state/` baseline captures were removed from the
+  public branch because they exposed a personal local path; `.agent/state/` is
+  now ignored. Historical evidence hashes remain indexed in
+  `docs/evidence-index.md`; raw archives are intentionally not copied or modified.
 
 ## Final retrospective
 
