@@ -438,7 +438,8 @@ def _adversarial_efficiency(root: Path) -> dict[str, Any]:
         family = str(manifest["workload_family"])
         durations[family].append((ended - started).total_seconds())
         designations[family] = str(manifest["designation"])
-    baseline = durations.get("ddp_full_parameter", [])
+    baseline_family = "ddp_training" if durations.get("ddp_training") else "ddp_full_parameter"
+    baseline = durations.get(baseline_family, [])
     baseline_median = statistics.median(baseline) if baseline else None
     strategies = {}
     for family, values in sorted(durations.items()):
@@ -448,12 +449,10 @@ def _adversarial_efficiency(root: Path) -> dict[str, Any]:
         strategies[family] = {
             "completed_run_count": len(values),
             "median_wall_duration_s": median,
-            "duration_ratio_vs_ddp_full_parameter": (
-                median / baseline_median if baseline_median else None
-            ),
+            "duration_ratio_vs_baseline": median / baseline_median if baseline_median else None,
         }
     return {
-        "baseline_family": "ddp_full_parameter",
+        "baseline_family": baseline_family,
         "baseline_median_wall_duration_s": baseline_median,
         "strategies": strategies,
         "note": "Wall-duration ratio is a coarse measured efficiency cost, not FLOP efficiency.",

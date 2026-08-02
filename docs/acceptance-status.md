@@ -15,6 +15,9 @@ Status as of the local SDK build:
   port, timeout/process-group cleanup, rank event evidence, and rank stream logs.
 - Bounded DDP, inference, calibration, compute, host/device, model/checkpoint,
   idle, and optional peer-copy workload implementations.
+- CPU-validated eight-family standard plan, explicit stable configuration IDs,
+  opt-in bounded variants, pre-execution corpus manifests, finalized completed-
+  run allow-lists, and per-family coverage-first summaries.
 - Grouped splitting, two-session holdout, baselines, signal ablations,
   per-family/run metrics, bootstrap uncertainty, abstention, held-out adversarial
   families, and duration-cost reporting.

@@ -158,12 +158,16 @@ def generate_report(
         )
         costs = evaluation.get("adversarial_efficiency_cost", {}).get("strategies", {})
         if costs:
+            duration_ratios = {
+                family: value.get(
+                    "duration_ratio_vs_baseline",
+                    value.get("duration_ratio_vs_ddp_full_parameter"),
+                )
+                for family, value in costs.items()
+            }
             lines.append(
                 "**Observed:** Median wall-duration ratios versus ordinary DDP: "
-                + "; ".join(
-                    f"{family}: {value['duration_ratio_vs_ddp_full_parameter']}"
-                    for family, value in costs.items()
-                )
+                + "; ".join(f"{family}: {ratio}" for family, ratio in duration_ratios.items())
                 + ". These are coarse duration costs, not FLOP efficiency."
             )
     else:

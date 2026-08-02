@@ -14,7 +14,7 @@ from typing import Any
 from commguard.exceptions import ArtifactExistsError, ValidationError
 from commguard.schemas import validate_artifact
 
-LAYOUT = ("environment", "runs", "features", "splits", "results", "figures")
+LAYOUT = ("environment", "corpora", "runs", "features", "splits", "results", "figures")
 
 
 class ArtifactStore:

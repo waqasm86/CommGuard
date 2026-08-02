@@ -90,8 +90,9 @@ Equivalent shell commands:
 python -m pip install --no-build-isolation --no-deps -e .
 commguard preflight --strict --output artifacts
 commguard run --profile smoke --output artifacts
-commguard features --input artifacts --output artifacts
-commguard evaluate --input artifacts --output artifacts
+commguard run --profile standard --repetitions 3 --output artifacts
+# Inspect the matrix summary and continue only if primary_coverage_gate.passed is true.
+commguard evaluate --input artifacts --output artifacts --minimum-runs-per-family 3
 commguard report --input artifacts --output artifacts/report.md
 ```
 
@@ -99,6 +100,11 @@ The standard and extended experiment profiles are calibration-gated. They stop
 when exactly two T4 GPUs, CUDA/NCCL, two distinct rank bindings, or responsive
 PCIe readings cannot be demonstrated. There is no CPU, Gloo, or one-GPU
 fallback for results labelled dual-GPU.
+
+The standard profile is the bounded eight-family benign pilot. The extended
+profile is opt-in and adds configuration variants plus optional peer copy. Both
+write a corpus plan before execution and report per-family coverage before any
+detector evaluation. See the [benign workload matrix](docs/benign-workload-matrix.md).
 
 ## Public API
 

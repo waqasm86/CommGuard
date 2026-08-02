@@ -10,17 +10,9 @@ from typing import Any
 
 from commguard.exceptions import CoverageError, ValidationError
 from commguard.schemas import CURRENT_SCHEMA_VERSION, load_artifact
+from commguard.workloads import BENIGN_REQUIRED_FAMILIES
 
-PRIMARY_BENIGN_FAMILIES = (
-    "ddp_training",
-    "inference_prefill_independent",
-    "inference_decode_independent",
-    "inference_synchronized",
-    "control_compute",
-    "control_host_transfer",
-    "control_model_or_checkpoint_load",
-    "control_idle",
-)
+PRIMARY_BENIGN_FAMILIES = BENIGN_REQUIRED_FAMILIES
 PRIMARY_WINDOW_SECONDS = (30.0,)
 DIAGNOSTIC_WINDOW_SECONDS = (5.0, 15.0)
 DEFAULT_WINDOW_SECONDS = (*DIAGNOSTIC_WINDOW_SECONDS, *PRIMARY_WINDOW_SECONDS)

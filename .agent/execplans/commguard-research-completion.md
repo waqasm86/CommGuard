@@ -119,7 +119,9 @@ Acceptance: all available CPU, lint, format, build, import, CLI, notebook, secre
 - [x] `2026-08-02T14:28:00+05:00` Phase 05 started from clean commit `ea48109`; implement the signed, privacy-bounded offline reference path before optional online adapters.
 - [x] `2026-08-02T14:35:56+05:00` Phase 05 completed: added versioned batch/heartbeat/ack/decision/error messages, canonical HMAC, exact sample allow-lists, payload/clock/sequence/replay/chain validation, bounded node agents with retry buffers, create-only offline logs, cross-node UTC aggregation, node health, forced abstention on incomplete windows, and optional HTTPS client/handler references.
 - [x] `2026-08-02T14:35:56+05:00` Phase 05 acceptance: 94 CPU-safe tests passed, one optional analysis test skipped, and five hardware tests were deselected; Ruff check/format, CPU import, and diff checks passed. The five central tests include a local two-agent success path plus replay, stale/gapped order, invalid signature/chain, oversized payload, unknown protocol, privacy rejection, clock skew, buffered retry, node loss, and abstention. No socket/TLS/physical multi-node execution is claimed.
-- [ ] Execute Phase 06 and its acceptance checks.
+- [x] `2026-08-02T14:49:32+05:00` Phase 06 completed CPU-safe implementation: canonicalized all eight required benign family IDs; added explicit configuration IDs, a bounded 24-run standard pilot and opt-in expanded variants; wrote corpus plans before calibration/execution and separate finalized allow-lists; and made matrix summaries extract and report per-family primary coverage without detector metrics.
+- [x] `2026-08-02T14:49:32+05:00` Phase 06 acceptance: 101 CPU-safe tests passed, one optional analysis integration test skipped, and five hardware tests were deselected. CPU planning tests cover every required worker mode, deterministic unique slots, duration/T4 bounds, stable configuration identity, opt-in variation, pre-execution manifest timing, finalized membership, incomplete evidence, and canonical/legacy DDP efficiency baselines. Canonical benign/quickstart notebook cells parse, remain unexecuted, default GPU work off, and use the coverage-aware SDK matrix path. No GPU workload was executed or claimed.
+- [x] `2026-08-02T14:49:32+05:00` Phase 06 commit gate: required Ruff check and format-check passed; wheel and sdist built successfully with `.venv/bin/python -m build`; CPU import, CLI estimates, changed-notebook compilation, canonical notebook JSON/output policy, and `git diff --check` passed.
 - [ ] Execute Phase 07 and its acceptance checks.
 - [ ] Execute Phase 08 and its acceptance checks.
 - [ ] Execute Phase 09 and its acceptance checks.
@@ -139,6 +141,8 @@ Acceptance: all available CPU, lint, format, build, import, CLI, notebook, secre
 - `2026-08-02`: Define 30 seconds as the immutable primary feature window and 5/15 seconds as diagnostics. Benign workload defaults collect 35 measured seconds after warmup so asynchronous sampler edges do not make a nominal 30-second run incapable of producing a 30-second common window.
 - `2026-08-02`: Require at least three primary runs per required family for detector evaluation, because a valid train/validation/test plan cannot represent a family with fewer. Derive stable configuration IDs from family plus canonical configuration when the plan does not provide one explicitly.
 - `2026-08-02`: Keep central protocol versioning separate from research artifact schemas. Use a standard-library, create-only offline transport as the authoritative test path; expose online HTTPS components only as operator-wrapped references with external TLS/identity/secret requirements.
+- `2026-08-02`: Use the acceptance YAML’s `control_model_or_checkpoint_load` as the canonical family ID; treat the experiment CSV’s `control_model_load` as a human-readable variant name only. Keep the standard profile benign-only with all eight required families, and move adversarial workloads to the Phase 07 opt-in workflow.
+- `2026-08-02`: Define the default benign pilot as three repetitions of eight base configurations. The expanded profile is opt-in and adds bounded configuration variants plus optional peer copy. A matrix plan is immutable evidence written before calibration, while the separately named final corpus manifest accepts completed runs only.
 
 ## Discoveries
 
@@ -154,6 +158,7 @@ Acceptance: all available CPU, lint, format, build, import, CLI, notebook, secre
 - Iteration-only completion was not sufficient evidence of usable telemetry duration. Rank-local measurement events and their common monotonic intersection are now required for completed, participation-valid v2 manifests; physical GPU execution remains pending compatible hardware.
 - The Phase 04 host has the development tools but not the optional analysis stack. Split and selection-policy behavior is fully CPU/dependency-free tested; fitting pandas/scikit-learn models remains unexecuted locally and must not be reported as a measured detector result.
 - Cross-node aggregation must use validated UTC timestamps because monotonic clocks are node-local. The local simulation sets `physical_multi_node_validated: false`; it cannot establish network, TLS, clock-sync, durability, or GPU-cluster behavior.
+- The pre-Phase-06 standard profile mixed benign and adversarial workloads, omitted required idle coverage, and used family names that did not match the acceptance YAML. The canonical notebooks also bypassed corpus planning and one called feature extraction without the now-required corpus argument. The registry, profiles, orchestration, and affected disabled-by-default notebook cells are now coherent; actual dual-T4 execution is still pending.
 
 ## Schema migrations
 
@@ -226,6 +231,13 @@ Phase 05 validation update: central protocol schemas, HMAC/allow-list/size/order
 controls, offline transport, two-agent aggregation, node staleness, retry, and
 decision abstention pass locally. Online TLS and physical multi-node behavior
 remain pending external deployment and hardware.
+
+Phase 06 validation update: CPU-only matrix planning and mocked lifecycle tests
+cover all eight required families, explicit configuration IDs, bounded pilot
+and expanded parameters, corpus-plan-before-calibration ordering, final accepted
+membership, and coverage-first per-family counts. The standard estimate is 24
+runs and 35 GPU-minutes at declared durations. This is a cost estimate, not a
+measured GPU result; CUDA/NCCL/NVML and peer behavior remain pending Kaggle.
 
 ## Recovery and idempotence
 

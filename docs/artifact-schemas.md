@@ -29,7 +29,9 @@ intervals.
 
 Declares every planned family/label/configuration slot and the exact accepted
 run allow-list. A run can fill at most one slot, and designation-aware selection
-prevents calibration controls from leaking into benign evaluation.
+prevents calibration controls from leaking into benign evaluation. Matrix
+orchestration writes a plan manifest before execution with an empty allow-list,
+then a separate final manifest after execution; neither artifact is rewritten.
 
 ## Telemetry sample
 

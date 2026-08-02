@@ -270,12 +270,15 @@ def _run_inference(
     sequence_length = int(config.get("sequence_length", 128))
     vocab_size = int(config.get("vocab_size", 2048))
     pattern = str(config.get("inference_pattern", "prefill"))
+    barrier_every = int(config.get("barrier_every", 1))
+    if barrier_every < 1:
+        raise ValueError("barrier_every must be at least one")
     controller = _duration_controller(config)
     step = 0
     with torch.inference_mode():
         tokens = torch.randint(vocab_size, (batch_size, sequence_length), device=local_rank)
         while controller.should_continue():
-            if synchronized:
+            if synchronized and step % barrier_every == 0:
                 dist.barrier()
             if pattern == "decode":
                 logits = model(tokens[:, : min(tokens.shape[1], 32)])
@@ -284,7 +287,14 @@ def _run_inference(
             else:
                 logits = model(tokens)
             checksum = float(logits.float().sum())
-            writer.emit("forward_complete", step=step, checksum=checksum, pattern=pattern)
+            writer.emit(
+                "forward_complete",
+                step=step,
+                checksum=checksum,
+                pattern=pattern,
+                synchronized=bool(synchronized and step % barrier_every == 0),
+                barrier_every=barrier_every if synchronized else None,
+            )
             writer.emit("heartbeat", step=step)
             controller.complete_iteration()
             step += 1

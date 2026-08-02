@@ -6,15 +6,24 @@ import json
 import os
 import random
 import statistics
+from collections import Counter
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from commguard.artifacts import ArtifactStore
 from commguard.calibration import analyze_calibration
+from commguard.corpus import CorpusManifest, PlannedRun
 from commguard.distributed.launcher import LaunchResult, launch_torchrun
 from commguard.environment.preflight import check_environment
-from commguard.exceptions import CalibrationError, WorkloadError
+from commguard.exceptions import CalibrationError, CoverageError, WorkloadError
+from commguard.features import (
+    PRIMARY_BENIGN_FAMILIES,
+    PRIMARY_WINDOW_SECONDS,
+    extract_feature_result,
+    require_primary_coverage,
+)
 from commguard.provenance import ProvenanceContext, new_corpus_id, new_run_id
 from commguard.schemas import CURRENT_SCHEMA_VERSION, SCHEMA_VERSION, TELEMETRY_FIELDS, RunManifest
 from commguard.telemetry import TelemetryCollector
@@ -367,16 +376,95 @@ def run_calibration_sweep(
 
 
 def estimate_matrix(profile: str, repetitions: int = 1) -> dict[str, Any]:
-    names = profile_workloads(profile)
-    seconds = sum(float(get_workload(name).get("estimated_seconds", 60)) for name in names)
-    seconds *= repetitions
+    plans = plan_matrix(profile, repetitions)
+    seconds = sum(float(plan.config.get("estimated_seconds", 60)) for plan in plans)
     return {
         "profile": profile,
-        "run_count": len(names) * repetitions,
+        "run_count": len(plans),
         "estimated_gpu_minutes": seconds * 2 / 60,
         "estimated_artifact_mib": max(5.0, seconds * 0.02),
         "estimate_only": True,
     }
+
+
+def plan_matrix(profile: str, repetitions: int = 1) -> tuple[PlannedRun, ...]:
+    """Build a deterministic, CPU-only matrix plan with stable configuration IDs."""
+    if repetitions < 1:
+        raise ValueError("matrix repetitions must be at least one")
+    names = [name for name in profile_workloads(profile) if not name.startswith("collective_")]
+    schedule = names * repetitions
+    random.Random(20260730).shuffle(schedule)
+    occurrences: Counter[str] = Counter()
+    plans: list[PlannedRun] = []
+    for index, name in enumerate(schedule):
+        config = get_workload(name)
+        occurrence = occurrences[name]
+        occurrences[name] += 1
+        config["workload_name"] = name
+        plans.append(
+            PlannedRun(
+                plan_id=f"{profile}-{index:04d}-{name}-{occurrence:03d}",
+                workload_family=str(config["family"]),
+                target_label=str(config["label"]),
+                config=config,
+                designation=str(config["designation"]),
+                random_seed=int(config.get("seed", 1337)),
+                workload_config_id=str(config["config_id"]),
+            )
+        )
+    return tuple(plans)
+
+
+def _corpus_manifest(
+    context: ProvenanceContext,
+    planned_runs: tuple[PlannedRun, ...],
+) -> CorpusManifest:
+    return CorpusManifest(
+        corpus_id=context.corpus_id,
+        collection_id=context.collection_id,
+        experiment_session_id=context.experiment_session_id,
+        node_id=context.node_id,
+        planned_runs=planned_runs,
+        accepted_run_ids=tuple(
+            plan.accepted_run_id for plan in planned_runs if plan.accepted_run_id is not None
+        ),
+        source_commit=context.source_commit,
+        source_dirty=context.source_dirty,
+        notebook_version=context.notebook_version,
+        input_archive_sha256=context.input_archive_sha256,
+        random_seed=20260730,
+    )
+
+
+def _family_summary(
+    plans: tuple[PlannedRun, ...],
+    coverage: tuple[Any, ...],
+) -> dict[str, dict[str, Any]]:
+    by_plan = {record.plan_id: record for record in coverage}
+    result: dict[str, dict[str, Any]] = {}
+    for family in sorted({plan.workload_family for plan in plans}):
+        family_plans = [plan for plan in plans if plan.workload_family == family]
+        family_coverage = [by_plan[plan.plan_id] for plan in family_plans]
+        reasons = Counter(
+            record.reason_code for record in family_coverage if record.reason_code is not None
+        )
+        result[family] = {
+            "planned": len(family_plans),
+            "completed": sum(plan.accepted_run_id is not None for plan in family_plans),
+            "failed": sum(plan.accepted_run_id is None for plan in family_plans),
+            "feature_valid": sum(
+                record.status == "included"
+                and all(
+                    record.emitted_windows.get(f"{window:g}", 0) > 0
+                    for window in PRIMARY_WINDOW_SECONDS
+                )
+                for record in family_coverage
+            ),
+            "feature_excluded": sum(record.status == "excluded" for record in family_coverage),
+            "coverage_reason_counts": dict(sorted(reasons.items())),
+            "workload_config_ids": sorted({plan.resolved_config_id() for plan in family_plans}),
+        }
+    return result
 
 
 def run_matrix(
@@ -386,11 +474,19 @@ def run_matrix(
     negative_calibration_mode: bool = False,
     timeout_s: float = 180.0,
 ) -> dict[str, Any]:
-    """Run a randomized profile after a session-specific calibration gate."""
+    """Run a planned benign profile after a session-specific calibration gate."""
     if repetitions is None:
         repetitions = 1 if profile == "smoke" else 3
     estimate = estimate_matrix(profile, repetitions)
     context = ProvenanceContext.create(corpus_id=new_corpus_id(f"{profile}-matrix"))
+    plans = plan_matrix(profile, repetitions)
+    store = ArtifactStore(output)
+    store.initialize()
+    plan_manifest = _corpus_manifest(context, plans)
+    plan_path = store.write_json(
+        f"corpora/{context.corpus_id}-plan.json",
+        plan_manifest.to_dict(),
+    )
     calibration = run_calibration_sweep(
         output=output,
         timeout_s=timeout_s,
@@ -404,12 +500,11 @@ def run_matrix(
         raise CalibrationError(
             f"standard/extended matrix blocked by negative calibration; see {calibration['path']}"
         )
-    names = profile_workloads(profile)
-    names = [name for name in names if not name.startswith("collective_")]
-    schedule = names * repetitions
-    random.Random(20260730).shuffle(schedule)
-    outcomes = [
-        run_experiment(
+    outcomes = []
+    finalized_plans: list[PlannedRun] = []
+    for plan in plans:
+        name = str(plan.config["workload_name"])
+        outcome = run_experiment(
             name,
             output=output,
             timeout_s=timeout_s,
@@ -417,8 +512,35 @@ def run_matrix(
             raise_on_failure=False,
             provenance=context,
         )
-        for name in schedule
-    ]
+        outcomes.append(outcome)
+        accepted_run_id = (
+            str(outcome["run_id"]) if outcome["manifest"]["exit_status"] == "completed" else None
+        )
+        finalized_plans.append(replace(plan, accepted_run_id=accepted_run_id))
+    final_manifest = _corpus_manifest(context, tuple(finalized_plans))
+    final_path = store.write_json(
+        f"corpora/{context.corpus_id}-final.json",
+        final_manifest.to_dict(),
+    )
+    extraction = extract_feature_result(output, final_manifest, output=output)
+    try:
+        coverage_gate = require_primary_coverage(
+            extraction,
+            required_families=PRIMARY_BENIGN_FAMILIES,
+            minimum_runs_per_family=3,
+        )
+    except CoverageError as exc:
+        coverage_gate = {
+            "passed": False,
+            "required_families": list(PRIMARY_BENIGN_FAMILIES),
+            "minimum_runs_per_family": 3,
+            "required_window_seconds": list(PRIMARY_WINDOW_SECONDS),
+            "reason": str(exc),
+        }
+    family_summary = _family_summary(tuple(finalized_plans), extraction.coverage)
+    schedule = [str(plan.config["workload_name"]) for plan in plans]
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    summary_relative = f"results/matrix-{profile}-{timestamp}.json"
     summary = {
         "artifact_kind": "experiment_summary",
         "schema_version": SCHEMA_VERSION,
@@ -428,6 +550,8 @@ def run_matrix(
         "calibration_status": calibration["status"],
         "negative_calibration_mode": negative_calibration_mode,
         "schedule": schedule,
+        "planned_corpus_manifest": str(plan_path.relative_to(store.root)),
+        "final_corpus_manifest": str(final_path.relative_to(store.root)),
         "run_ids": [outcome["run_id"] for outcome in outcomes],
         "experiment_session_id": context.experiment_session_id,
         "collection_id": context.collection_id,
@@ -437,8 +561,12 @@ def run_matrix(
         "source_dirty": context.source_dirty,
         "completed": sum(outcome["manifest"]["exit_status"] == "completed" for outcome in outcomes),
         "failed": sum(outcome["manifest"]["exit_status"] != "completed" for outcome in outcomes),
+        "feature_valid": sum(values["feature_valid"] for values in family_summary.values()),
+        "family_counts": family_summary,
+        "feature_extraction": extraction.summary(),
+        "primary_coverage_gate": coverage_gate,
+        "detector_metrics_computed": False,
+        "summary_artifact": summary_relative,
     }
-    store = ArtifactStore(output)
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-    store.write_json(f"results/matrix-{profile}-{timestamp}.json", summary)
+    store.write_json(summary_relative, summary)
     return summary

@@ -8,7 +8,8 @@ CommGuard separates:
 4. `distributed`: torchrun isolation, rank binding, heartbeats, and cleanup.
 5. `calibration`: controlled payloads and PCIe-response falsification gate.
 6. `workloads`: DDP training, inference, controls, and bounded variants.
-7. `orchestrator`: run lifecycle, matrix estimates, timeouts, partial evidence.
+7. `orchestrator`: pre-execution corpus plans, run lifecycle, matrix estimates,
+   timeouts, finalized allow-lists, and coverage-first summaries.
 8. `features`: deterministic windows and cross-GPU signal relationships.
 9. `evaluation`: grouped splits, baselines, ablations, abstention, leakage audit.
 10. `central`: signed node batches, offline/optional HTTP transport, ingestion,

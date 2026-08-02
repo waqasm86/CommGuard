@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 
 import pytest
@@ -214,14 +215,25 @@ def test_environment_fingerprint_excludes_live_measurement_values() -> None:
 
 def test_matrix_reuses_one_context_for_calibration_and_runs(tmp_path, monkeypatch) -> None:
     observed: list[ProvenanceContext] = []
+    run_number = 0
 
     def calibration(**kwargs):
         observed.append(kwargs["provenance"])
+        plan_files = list((tmp_path / "corpora").glob("*-plan.json"))
+        assert len(plan_files) == 1
+        planned = CorpusManifest.from_dict(json.loads(plan_files[0].read_text()))
+        assert planned.accepted_run_ids == ()
+        assert all(plan.accepted_run_id is None for plan in planned.planned_runs)
         return {"status": "supported", "path": "calibration.json"}
 
     def experiment(*args, **kwargs):
+        nonlocal run_number
         observed.append(kwargs["provenance"])
-        return {"run_id": f"run-{args[0]}", "manifest": {"exit_status": "completed"}}
+        run_number += 1
+        return {
+            "run_id": f"run-{args[0]}-{run_number}",
+            "manifest": {"exit_status": "completed"},
+        }
 
     monkeypatch.setattr(orchestrator, "run_calibration_sweep", calibration)
     monkeypatch.setattr(orchestrator, "run_experiment", experiment)
@@ -234,3 +246,19 @@ def test_matrix_reuses_one_context_for_calibration_and_runs(tmp_path, monkeypatc
     assert len({item.collection_id for item in observed}) == 1
     assert len({item.corpus_id for item in observed}) == 1
     assert summary["experiment_session_id"] == observed[0].experiment_session_id
+    assert summary["completed"] == 2
+    assert summary["family_counts"]["ddp_training"] == {
+        "planned": 2,
+        "completed": 2,
+        "failed": 0,
+        "feature_valid": 0,
+        "feature_excluded": 2,
+        "coverage_reason_counts": {"incomplete_run": 2},
+        "workload_config_ids": ["ddp-training-amp-b4-s128-v1"],
+    }
+    assert summary["primary_coverage_gate"]["passed"] is False
+    assert summary["detector_metrics_computed"] is False
+    final = CorpusManifest.from_dict(
+        json.loads((tmp_path / summary["final_corpus_manifest"]).read_text())
+    )
+    assert final.accepted_run_ids == ("run-ddp_train-1", "run-ddp_train-2")

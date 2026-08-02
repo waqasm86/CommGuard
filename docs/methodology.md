@@ -77,6 +77,15 @@ telemetry interval below the 30-second primary window. A supplied cap causes an
 explicit failure if duration remains unmet. Rank-local interval events are
 validated and their intersection is persisted in the run manifest.
 
+The standard benign pilot has the eight acceptance-criteria family IDs and
+three repetitions per family. Its corpus plan is create-only and precedes
+calibration and workload execution. A distinct final manifest assigns only
+completed runs, after which the coverage summary reports planned, completed,
+failed, and primary-feature-valid counts per family. The extended profile is
+explicitly opt-in and adds bounded batch, sequence, model-size, precision,
+barrier-cadence, transfer, and optional peer-copy variants. See the
+[benign workload matrix](benign-workload-matrix.md).
+
 Falsification includes unresponsive counters, substantial class overlap,
 grouped-score collapse, duration/startup/framework leakage, hard-negative false
 positives, adversarial false negatives, and session instability.
