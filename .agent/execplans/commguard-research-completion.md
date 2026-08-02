@@ -22,12 +22,25 @@ Observable success:
 
 The full timestamped baseline is `.agent/state/20260802T125025+0500/baseline.md`.
 
+The authoritative resumption audit is
+`.agent/state/20260802T084010Z/baseline.md`. It records the state after the
+Phase 01 commit and before continuing the partial Phase 02 work.
+
 - Git: `main` at `1e790895ae3bd0919dde0f383e78fb14f767d359`, tracking `origin/main`.
 - Pre-existing worktree: four tracked notebook deletions, three untracked notebook replacements, and five untracked archives.
 - CPU tests: 56 passed, one repository notebook-path test failed, five hardware tests deselected.
 - Ruff: `ruff check src tests` passes; root check and formatting fail, substantially because live executed notebooks are included and tracked Python predates the current Ruff formatter.
 - Build: unavailable because the local environment lacks the `build` module.
 - Evidence: real dual-T4 calibration and 18-run benign collection exist, but primary derived coverage is DDP-versus-idle only. PCIe-only detection missed the held-out training run.
+
+Current resumption state:
+
+- Git: `codex/commguard-research-completion` at `c920a738c1610eaf37e1ab3ae8912d2ac41db287`.
+- Worktree: modified `provenance.py` and `schemas.py`, plus new `corpus.py`; these pre-existing partial Phase 02 changes are hash-recorded in the resumption inventory.
+- CPU tests: 57 passed and five hardware tests deselected.
+- Ruff check: passed. Ruff format: only the partial Phase 02 files require formatting.
+- Build: passed in a fresh temporary output directory using the now-available project-virtualenv `build 1.5.0`.
+- Canonical notebook and archive hashes remain unchanged from the Phase 01 boundary.
 
 ## Source-grounded research constraints
 
@@ -93,7 +106,10 @@ Acceptance: all available CPU, lint, format, build, import, CLI, notebook, secre
 - [x] `2026-08-02T12:54:00+05:00` Created and switched to `codex/commguard-research-completion`; the pre-existing notebook/archive worktree state was preserved.
 - [x] `2026-08-02T13:05:00+05:00` Phase 01 restored the three missing tracked canonical sources, retained the byte-identical shorter research-notebook rename, added root instructions and notebook policy/inventory, ignored local executed evidence/archives without deleting them, repaired CI/metadata/tests, and formatted tracked Python.
 - [x] `2026-08-02T13:18:00+05:00` Phase 01 acceptance: repository tests 5 passed; CPU-safe suite 57 passed/5 deselected; Ruff check and format passed; canonical notebooks are unexecuted; executed hashes remained unchanged; wheel/sdist, import, CLI, and `git diff --check` passed.
-- [ ] Execute Phase 02 and its acceptance checks.
+- [x] `2026-08-02T13:40:10+05:00` Re-read the completion package in the required order and independently re-audited the authoritative checkout, all authored source/tests/docs/notebook sources, executed-notebook evidence, and archive manifests/summaries before resuming implementation.
+- [x] `2026-08-02T13:40:10+05:00` Recorded the current feature-branch/HEAD/tool/check state and the exact three-file partial Phase 02 worktree boundary in `.agent/state/20260802T084010Z/baseline.md`.
+- [x] `2026-08-02T13:51:00+05:00` Phase 02 completed: added v2 provenance/corpus contracts, true session/collection/corpus/node propagation through orchestration, stable capability-based environment fingerprints, dirty-source/input/notebook provenance, and non-destructive legacy ambiguity mapping.
+- [x] `2026-08-02T13:51:00+05:00` Phase 02 acceptance: 65 CPU-safe tests passed/5 deselected; Ruff check/format, temporary-output wheel/sdist build, import/public API, CLI help, and `git diff --check` passed. New tests cover shared-session/unique-run IDs, separate sessions in one corpus, exact designation-aware allow-lists, actual matrix context reuse, v1 migration, v2 required fields, and stable environment hashing.
 - [ ] Execute Phase 03 and its acceptance checks.
 - [ ] Execute Phase 04 and its acceptance checks.
 - [ ] Execute Phase 05 and its acceptance checks.
@@ -111,6 +127,9 @@ Acceptance: all available CPU, lint, format, build, import, CLI, notebook, secre
 - `2026-08-02`: Keep required core dependencies empty. Analysis, telemetry, and optional online serving stay in extras or use the standard library where practical.
 - `2026-08-02`: Use version `0.2.0` only if the implementation/schema/API milestones are completed and documented; otherwise use an explicit prerelease. Final decision is deferred until Phase 09.
 - `2026-08-02`: Do not install missing build tooling without explicit approval. First check whether a truthful equivalent build validation is available; otherwise record/request the dependency at the gate.
+- `2026-08-02`: Continue the existing partial Phase 02 implementation selectively. Do not replace it wholesale; first make its v2 manifest requirements coherent with orchestration and add regression tests for every new contract.
+- `2026-08-02`: Treat a corpus as a deliberate matrix that may span sessions. Each session-specific collection manifest has a unique `collection_id` and true `experiment_session_id`, while deliberately repeated collections may share the same `corpus_id`.
+- `2026-08-02`: Keep `session_fingerprint` only as a compatibility alias in new environment reports. It equals `environment_fingerprint`, is explicitly non-semantic for grouping, and live telemetry values are excluded from its stable-capability hash.
 
 ## Discoveries
 
@@ -122,6 +141,7 @@ Acceptance: all available CPU, lint, format, build, import, CLI, notebook, secre
 - The 18 benign workloads completed, but several wall durations were only six to seven seconds; completion is not coverage.
 - Every merged manifest has a distinct environment fingerprint. The feature artifact therefore reports eight apparent “sessions” for eight runs, reproducing the invalid grouping defect.
 - Calibration-stage idle runs entered the 16-row feature artifact. Primary corpus selection must come from a declared corpus manifest, not designation alone.
+- At the Phase 02 resumption boundary, schema validation accepts v2 but the orchestrator still constructs a v2 `RunManifest` without required session/corpus/node/dirty/seed fields. Existing tests do not exercise that path because GPU orchestration is hardware-marked.
 
 ## Schema migrations
 
@@ -138,6 +158,14 @@ Planned schema migration:
 | Evaluation | strategy prose may disagree with override | actual strategy, groups, selection protocol, counts/warnings and communication-only primary block | old result remains readable, never relabeled |
 
 Exact version identifiers and field mappings will be updated in this section during Phases 02–04.
+
+Phase 02 implemented schema `2.0` for new run, environment, and corpus records.
+Telemetry/workload/calibration/summary records remain readable under `1.0`
+where their contract did not change. `load_artifact(..., migrate_legacy=True)`
+returns a new `2.0` view with `source_schema_version: "1.0"` and
+`legacy_grouping_ambiguous: true`; it never changes the source file. Unknown
+session/corpus/node fields remain null rather than being inferred. Full field
+semantics and compatibility behavior are in `docs/schema-migrations.md`.
 
 ## Validation matrix
 
@@ -156,6 +184,15 @@ Exact version identifiers and field mappings will be updated in this section dur
 | Multi-node | two-agent CPU simulation | pending implementation |
 | Multi-node | physical online deployment/interconnect | pending hardware validation; no claim permitted |
 
+Resumption overrides for current tool state: CPU-safe pytest, Ruff check, and
+temporary-output build pass; Ruff format is pending only for the partial Phase
+02 files. The original baseline rows above remain historical facts from the
+pre-Phase-01 boundary.
+
+Phase 02 validation update: schema/provenance/corpus tests pass locally;
+coverage, split, central-monitoring, and expanded workload tests remain pending
+their respective phases. Ruff format no longer has a pending Phase 02 failure.
+
 ## Recovery and idempotence
 
 - Never use Git reset, clean, force checkout, history rewrite, or force push.
@@ -168,6 +205,7 @@ Exact version identifiers and field mappings will be updated in this section dur
 ## Artifacts
 
 - `.agent/state/20260802T125025+0500/baseline.md` — authoritative pre-change inventory, SHA-256 `38a8c7857c4475e90936620dd7a579c126c7043638c9f9ea12bda7c219309aab`.
+- `.agent/state/20260802T084010Z/baseline.md` — authoritative resumption inventory after Phase 01 and before continued Phase 02 edits.
 - `.agent/execplans/commguard-research-completion.md` — this living plan (hash changes as the plan evolves).
 - Existing evidence archive hashes are recorded in the baseline; raw archives are intentionally not copied or modified.
 

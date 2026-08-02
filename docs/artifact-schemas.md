@@ -1,21 +1,31 @@
 # Artifact schemas
 
-All JSON/JSONL records carry `artifact_kind` and `schema_version`. Version `1.0`
-is additive-only. A future breaking change must use a new major schema version
-and an explicit, tested migration; raw evidence itself is never rewritten.
+All JSON/JSONL records carry `artifact_kind` and `schema_version`. Historical
+version `1.0` remains readable. New provenance and corpus manifests use version
+`2.0`; its non-destructive legacy view is documented in
+[`schema-migrations.md`](schema-migrations.md). Raw evidence is never rewritten.
 
 ## Environment report
 
 Records Python/OS/kernel, GPUs, driver, CUDA/PyTorch/NCCL, packages, topology
-command, peer capability, RAM/disk, optional network check, source commit,
-session fingerprint, and readiness gates.
+command, peer capability, RAM/disk, optional network check, source state,
+experiment session, node, environment fingerprint, and readiness gates. The
+environment fingerprint describes stable capabilities and is not a session ID.
 
 ## Run manifest
 
-Records identity, label/family/designation, seed, model/workload dimensions,
+Records session/corpus/collection/run/node identity, label/family/designation,
+seed, model/workload dimensions,
 precision, batch/sequence/accumulation, world size, environment fingerprint,
 source commit, warmup, timestamps, NCCL environment, rank exit codes,
-participation validity, failure category/reason, and exit status.
+participation validity, failure category/reason, source dirty state, optional
+notebook/input archive provenance, and exit status.
+
+## Corpus manifest
+
+Declares every planned family/label/configuration slot and the exact accepted
+run allow-list. A run can fill at most one slot, and designation-aware selection
+prevents calibration controls from leaking into benign evaluation.
 
 ## Telemetry sample
 

@@ -6,7 +6,6 @@ import json
 import os
 import random
 import statistics
-import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -16,15 +15,10 @@ from commguard.calibration import analyze_calibration
 from commguard.distributed.launcher import LaunchResult, launch_torchrun
 from commguard.environment.preflight import check_environment
 from commguard.exceptions import CalibrationError, WorkloadError
-from commguard.provenance import source_identifier
-from commguard.schemas import SCHEMA_VERSION, TELEMETRY_FIELDS, RunManifest
+from commguard.provenance import ProvenanceContext, new_corpus_id, new_run_id
+from commguard.schemas import CURRENT_SCHEMA_VERSION, SCHEMA_VERSION, TELEMETRY_FIELDS, RunManifest
 from commguard.telemetry import TelemetryCollector
 from commguard.workloads import get_workload, profile_workloads
-
-
-def _new_run_id(name: str) -> str:
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-    return f"{stamp}-{name}-{uuid.uuid4().hex[:8]}"
 
 
 def _nccl_environment() -> dict[str, str]:
@@ -98,6 +92,7 @@ def _write_run_evidence(
     collector: TelemetryCollector,
     diagnostics: dict[str, Any],
     preflight: dict[str, Any],
+    provenance: ProvenanceContext,
     started: str,
     ended: str,
 ) -> dict[str, Any]:
@@ -181,8 +176,8 @@ def _write_run_evidence(
             "packages": preflight["packages"],
             "telemetry_capabilities": preflight["telemetry_capabilities"],
         },
-        environment_fingerprint=str(preflight["session_fingerprint"]),
-        source_commit=source_identifier(),
+        environment_fingerprint=str(preflight["environment_fingerprint"]),
+        source_commit=provenance.source_commit,
         started_at_utc=started,
         ended_at_utc=ended,
         warmup_seconds=float(config.get("warmup_seconds", 2.0)),
@@ -192,6 +187,15 @@ def _write_run_evidence(
         rank_exit_codes=result.rank_exit_codes,
         nccl_environment=_nccl_environment(),
         participation_valid=result.participation_valid,
+        experiment_session_id=provenance.experiment_session_id,
+        collection_id=provenance.collection_id,
+        corpus_id=provenance.corpus_id,
+        node_id=provenance.node_id,
+        source_dirty=provenance.source_dirty,
+        input_archive_sha256=provenance.input_archive_sha256,
+        notebook_version=provenance.notebook_version,
+        random_seed=int(config["seed"]),
+        schema_version=CURRENT_SCHEMA_VERSION,
     )
     store.write_json(run_prefix / "manifest.json", manifest.to_dict())
     return {
@@ -210,15 +214,17 @@ def run_experiment(
     timeout_s: float = 180.0,
     strict_preflight: bool = True,
     raise_on_failure: bool = True,
+    provenance: ProvenanceContext | None = None,
 ) -> dict[str, Any]:
     """Run one isolated two-rank experiment and preserve success or failure evidence."""
     store = ArtifactStore(output)
     store.initialize()
-    preflight = check_environment(strict=strict_preflight)
+    context = provenance or ProvenanceContext.create(corpus_id=new_corpus_id(workload))
+    preflight = check_environment(strict=strict_preflight, provenance=context)
     config = get_workload(workload)
     if overrides:
         config.update(overrides)
-    run_id = _new_run_id(workload)
+    run_id = new_run_id(workload, context.experiment_session_id)
     config.update(
         {
             "run_id": run_id,
@@ -227,6 +233,7 @@ def run_experiment(
             "process_group_timeout_s": min(float(timeout_s) * 0.8, 120.0),
             "warmup_seconds": float(config.get("warmup_seconds", 2.0)),
             "deterministic": bool(config.get("deterministic", False)),
+            **context.run_fields(random_seed=int(config.get("seed", 1337))),
         }
     )
     run_directory = store.resolve(Path("runs") / run_id)
@@ -259,6 +266,7 @@ def run_experiment(
         collector,
         collector_diagnostics,
         preflight,
+        context,
         started,
         ended,
     )
@@ -278,7 +286,9 @@ def run_calibration_sweep(
     collective: str = "all_reduce",
     repetitions: int = 1,
     timeout_s: float = 180.0,
+    provenance: ProvenanceContext | None = None,
 ) -> dict[str, Any]:
+    context = provenance or ProvenanceContext.create(corpus_id=new_corpus_id("calibration"))
     observations: list[dict[str, Any]] = []
     for repetition in range(repetitions):
         for payload in payload_mib:
@@ -293,6 +303,7 @@ def run_calibration_sweep(
                 timeout_s=timeout_s,
                 strict_preflight=True,
                 raise_on_failure=False,
+                provenance=context,
             )
             observations.append(
                 {
@@ -309,7 +320,19 @@ def run_calibration_sweep(
                 }
             )
     result = analyze_calibration(observations)
-    result["session_fingerprint"] = check_environment(strict=True)["session_fingerprint"]
+    environment = check_environment(strict=True, provenance=context)
+    result.update(
+        {
+            "experiment_session_id": context.experiment_session_id,
+            "collection_id": context.collection_id,
+            "corpus_id": context.corpus_id,
+            "node_id": context.node_id,
+            "environment_fingerprint": environment["environment_fingerprint"],
+            "session_fingerprint": environment["environment_fingerprint"],
+            "source_commit": context.source_commit,
+            "source_dirty": context.source_dirty,
+        }
+    )
     store = ArtifactStore(output)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     path = store.write_json(f"results/calibration-{timestamp}.json", result)
@@ -341,7 +364,12 @@ def run_matrix(
     if repetitions is None:
         repetitions = 1 if profile == "smoke" else 3
     estimate = estimate_matrix(profile, repetitions)
-    calibration = run_calibration_sweep(output=output, timeout_s=timeout_s)
+    context = ProvenanceContext.create(corpus_id=new_corpus_id(f"{profile}-matrix"))
+    calibration = run_calibration_sweep(
+        output=output,
+        timeout_s=timeout_s,
+        provenance=context,
+    )
     if (
         calibration["status"] != "supported"
         and profile != "smoke"
@@ -361,6 +389,7 @@ def run_matrix(
             timeout_s=timeout_s,
             strict_preflight=True,
             raise_on_failure=False,
+            provenance=context,
         )
         for name in schedule
     ]
@@ -374,6 +403,12 @@ def run_matrix(
         "negative_calibration_mode": negative_calibration_mode,
         "schedule": schedule,
         "run_ids": [outcome["run_id"] for outcome in outcomes],
+        "experiment_session_id": context.experiment_session_id,
+        "collection_id": context.collection_id,
+        "corpus_id": context.corpus_id,
+        "node_id": context.node_id,
+        "source_commit": context.source_commit,
+        "source_dirty": context.source_dirty,
         "completed": sum(outcome["manifest"]["exit_status"] == "completed" for outcome in outcomes),
         "failed": sum(outcome["manifest"]["exit_status"] != "completed" for outcome in outcomes),
     }

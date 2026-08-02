@@ -1,0 +1,204 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+import pytest
+
+from commguard import orchestrator
+from commguard.corpus import CorpusManifest, PlannedRun
+from commguard.environment.preflight import _environment_fingerprint
+from commguard.exceptions import ValidationError
+from commguard.provenance import ProvenanceContext, new_run_id
+from commguard.schemas import (
+    CURRENT_SCHEMA_VERSION,
+    LEGACY_SCHEMA_VERSION,
+    RunManifest,
+    load_artifact,
+    validate_artifact,
+)
+
+
+def legacy_manifest() -> RunManifest:
+    timestamp = datetime(2026, 8, 1, tzinfo=timezone.utc).isoformat()
+    return RunManifest(
+        run_id="legacy-run",
+        workload_name="ddp_train",
+        workload_label="training",
+        workload_family="ddp_full_parameter",
+        designation="benign",
+        seed=1337,
+        world_size=2,
+        config={},
+        environment={},
+        environment_fingerprint="historical-per-run-fingerprint",
+        source_commit="1e790895",
+        started_at_utc=timestamp,
+        ended_at_utc=timestamp,
+        warmup_seconds=2.0,
+        exit_status="completed",
+        failure_category=None,
+        failure_reason=None,
+        rank_exit_codes={"0": 0, "1": 0},
+        nccl_environment={},
+        participation_valid=True,
+        schema_version=LEGACY_SCHEMA_VERSION,
+    )
+
+
+def test_context_is_shared_across_runs_but_run_ids_are_unique(tmp_path) -> None:
+    context = ProvenanceContext.create(
+        corpus_id="corpus-benign-v2",
+        experiment_session_id="session-kaggle-a",
+        collection_id="collection-kaggle-a",
+        node_id="node-0",
+        repository_root=tmp_path,
+    )
+
+    first = new_run_id("ddp train", context.experiment_session_id)
+    second = new_run_id("ddp train", context.experiment_session_id)
+
+    assert first != second
+    assert first.startswith("run-kaggle-a-ddp-train-")
+    assert context.run_fields()["experiment_session_id"] == "session-kaggle-a"
+    assert context.source_dirty is True
+
+
+def test_separate_sessions_can_share_one_deliberate_corpus(tmp_path) -> None:
+    first = ProvenanceContext.create(
+        corpus_id="corpus-benign-v2",
+        experiment_session_id="session-a",
+        repository_root=tmp_path,
+    )
+    second = ProvenanceContext.create(
+        corpus_id="corpus-benign-v2",
+        experiment_session_id="session-b",
+        repository_root=tmp_path,
+    )
+
+    assert first.corpus_id == second.corpus_id
+    assert first.experiment_session_id != second.experiment_session_id
+    assert first.collection_id != second.collection_id
+
+
+def test_corpus_allow_list_prevents_calibration_idle_leakage() -> None:
+    manifest = CorpusManifest(
+        corpus_id="corpus-benign-v2",
+        collection_id="collection-a",
+        experiment_session_id="session-a",
+        node_id="node-0",
+        planned_runs=(
+            PlannedRun(
+                plan_id="idle-benign-0",
+                workload_family="control_idle",
+                target_label="control",
+                config={},
+                accepted_run_id="run-benign-idle",
+            ),
+            PlannedRun(
+                plan_id="idle-calibration-0",
+                workload_family="calibration_idle",
+                target_label="calibration",
+                config={},
+                designation="calibration",
+                accepted_run_id="run-calibration-idle",
+            ),
+        ),
+        accepted_run_ids=("run-benign-idle", "run-calibration-idle"),
+        source_commit="commit-a",
+        source_dirty=False,
+        notebook_version="benign-v2",
+        input_archive_sha256=None,
+        random_seed=1337,
+    )
+
+    payload = manifest.to_dict()
+    validate_artifact(payload)
+    assert manifest.allows("run-benign-idle", "benign")
+    assert not manifest.allows("run-calibration-idle", "benign")
+    assert manifest.allows("run-calibration-idle", "calibration")
+
+
+def test_legacy_manifest_loads_with_explicit_ambiguous_grouping(tmp_path) -> None:
+    source = tmp_path / "manifest.json"
+    source.write_text(__import__("json").dumps(legacy_manifest().to_dict()), encoding="utf-8")
+
+    original = load_artifact(source)
+    migrated = load_artifact(source, migrate_legacy=True)
+
+    assert isinstance(original, dict) and original["schema_version"] == LEGACY_SCHEMA_VERSION
+    assert isinstance(migrated, dict) and migrated["schema_version"] == CURRENT_SCHEMA_VERSION
+    assert migrated["source_schema_version"] == LEGACY_SCHEMA_VERSION
+    assert migrated["legacy_grouping_ambiguous"] is True
+    assert migrated["experiment_session_id"] is None
+    validate_artifact(migrated)
+
+
+def test_new_manifest_requires_true_grouping_fields() -> None:
+    payload = legacy_manifest().to_dict()
+    payload["schema_version"] = CURRENT_SCHEMA_VERSION
+
+    with pytest.raises(ValidationError, match="experiment_session_id"):
+        validate_artifact(payload)
+
+
+def test_environment_fingerprint_excludes_live_measurement_values() -> None:
+    base = {
+        "gpus": [{"uuid": "GPU-0"}, {"uuid": "GPU-1"}],
+        "platform": "test",
+        "kernel": "test",
+        "torch": {"version": "test"},
+        "packages": {"torch": "test"},
+        "hostname": "node-0",
+        "kaggle_session": {},
+        "telemetry_capabilities": {
+            "available": True,
+            "devices": [
+                {
+                    "gpu_index": 0,
+                    "gpu_uuid": "GPU-0",
+                    "fields": {
+                        "power_draw_w": {
+                            "value": 10.0,
+                            "supported": True,
+                            "unit": "watts",
+                            "error": None,
+                        }
+                    },
+                }
+            ],
+            "error": None,
+        },
+    }
+    changed_value = __import__("copy").deepcopy(base)
+    changed_value["telemetry_capabilities"]["devices"][0]["fields"]["power_draw_w"]["value"] = 200.0
+    changed_support = __import__("copy").deepcopy(base)
+    changed_support["telemetry_capabilities"]["devices"][0]["fields"]["power_draw_w"].update(
+        {"value": None, "supported": False, "error": "unsupported"}
+    )
+
+    assert _environment_fingerprint(base) == _environment_fingerprint(changed_value)
+    assert _environment_fingerprint(base) != _environment_fingerprint(changed_support)
+
+
+def test_matrix_reuses_one_context_for_calibration_and_runs(tmp_path, monkeypatch) -> None:
+    observed: list[ProvenanceContext] = []
+
+    def calibration(**kwargs):
+        observed.append(kwargs["provenance"])
+        return {"status": "supported", "path": "calibration.json"}
+
+    def experiment(*args, **kwargs):
+        observed.append(kwargs["provenance"])
+        return {"run_id": f"run-{args[0]}", "manifest": {"exit_status": "completed"}}
+
+    monkeypatch.setattr(orchestrator, "run_calibration_sweep", calibration)
+    monkeypatch.setattr(orchestrator, "run_experiment", experiment)
+    monkeypatch.setattr(orchestrator, "profile_workloads", lambda profile: ["ddp_train"])
+
+    summary = orchestrator.run_matrix("smoke", output=tmp_path, repetitions=2)
+
+    assert len(observed) == 3
+    assert len({item.experiment_session_id for item in observed}) == 1
+    assert len({item.collection_id for item in observed}) == 1
+    assert len({item.corpus_id for item in observed}) == 1
+    assert summary["experiment_session_id"] == observed[0].experiment_session_id
