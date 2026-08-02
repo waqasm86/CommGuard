@@ -3,7 +3,7 @@
 ## Inspect locally
 
 ```bash
-git switch codex/commguard-pre-kaggle-audit-fixes
+git switch codex/fix-calibration-idle-and-kaggle-workflow
 git status --short --branch
 git log --oneline origin/main..HEAD
 git diff --check origin/main...HEAD
@@ -19,7 +19,7 @@ the tracked diff.
 The exact command is:
 
 ```bash
-git push -u origin codex/commguard-pre-kaggle-audit-fixes
+git push -u origin codex/fix-calibration-idle-and-kaggle-workflow
 ```
 
 Never push or merge `main`, and never force-push. After the feature branch is
@@ -50,6 +50,13 @@ repetitions plus three AllReduce repetitions at 1, 4, 16, and 64 MiB. The
 benign notebook labels the restored calibration as prior-session evidence and
 runs a fresh calibration as its exact current-session collection gate. Do not
 substitute either artifact for the other.
+
+The earlier calibration-v3 attempt is debugging evidence only: source and
+collectives ran on T4 x2, but the missing `idle` dispatch made all idle runs
+fail, leaving a correctly `not_supported` result. Do not supply that archive to
+the benign notebook. Review this branch, put its final pushed SHA in a fresh
+calibration notebook copy, and run once from the first cell. Share the executed
+notebook, archive, and `.sha256` before proceeding.
 
 Expected output patterns:
 

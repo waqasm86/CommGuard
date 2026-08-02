@@ -51,6 +51,12 @@ Exact hashes and claim boundaries are in [`evidence-index.md`](evidence-index.md
 
 ## Requires Kaggle dual-T4 evidence
 
+The first modern calibration-v3 attempt does not satisfy these items. Although
+it verified two T4 devices, reviewed-source import, CUDA/NCCL, and collective
+execution, all idle runs failed on the then-missing `idle` worker dispatch. Its
+zero-idle result was correctly `not_supported` and is retained only for
+debugging; a clean patched calibration rerun is required.
+
 - Completion-series two-T4 inventory and peer/topology artifact under the
   current provenance/schema contract.
 - Current two-rank NCCL initialization and distinct UUID bindings.

@@ -7,6 +7,12 @@
    [`NEXT_KAGGLE_EXPERIMENTS.md`](NEXT_KAGGLE_EXPERIMENTS.md).
 5. Start with `commguard_calibration_v3.ipynb` and run from the first cell.
 
+Do not reuse the first failed calibration-v3 archive. That T4 x2 attempt reached
+CUDA/NCCL and collectives, but worker mode `idle` was absent, every idle run
+failed, and the calibration was correctly `not_supported`. Preserve it as
+debugging evidence and use a fresh notebook run ID/directory for the patched
+rerun.
+
 Each notebook clones `https://github.com/waqasm86/CommGuard.git` into a fresh
 working directory and installs the detached reviewed checkout with:
 
@@ -22,8 +28,9 @@ restore destinations that already exist.
 Leave the committed placeholder empty until the reviewed feature branch has
 been pushed, then insert that pushed commit's full SHA into all four notebooks.
 The calibration notebook runs the bounded idle-aware 3 × (idle + 1/4/16/64 MiB)
-matrix. Copy its exact calibration artifact path and SHA-256, not merely the
-archive name, into the benign notebook.
+matrix exactly once in a unique output directory. Copy its exact calibration
+artifact path and SHA-256, not merely the archive name, into the benign notebook
+only when its modern status is `supported`.
 
 The benign notebook labels the restored calibration as prior-session input and
 runs a fresh current-session calibration as its actual gate. It prints the exact

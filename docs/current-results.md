@@ -7,6 +7,20 @@ The current empirical detector task is effectively **DDP versus idle**, not the
 intended broad benign comparison. This analysis is grounded in evidence E4 and
 E5 from the [`evidence index`](evidence-index.md).
 
+## First modern calibration-v3 attempt
+
+The first calibration-v3 Kaggle attempt verified the reviewed checkout and two
+Tesla T4 devices, imported CommGuard from that checkout, found CUDA and NCCL,
+and executed the collective calibration runs. Every idle launch failed in the
+worker with `ValueError: unknown mode 'idle'`; consequently
+`idle_baseline_usable_repetitions` was zero and the result was correctly
+`not_supported`.
+
+This is software-integration debugging evidence. It does not show that the PCIe
+readings are unusable, must not be consumed by a benign run, and does not replace
+a clean modern calibration. No benign corpus, detector evaluation, adversarial
+run, or physical multi-node validation followed it.
+
 ## What was measured
 
 The historical preflight recorded a strict-ready single-host Kaggle environment
