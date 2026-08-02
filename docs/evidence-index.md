@@ -2,9 +2,8 @@
 
 This index is the claim boundary for CommGuard's current empirical results. Raw
 archives and executed notebooks are ignored local evidence and are not committed
-or rewritten. The authoritative pre-completion inventory and independent
-read-only audit are preserved in
-[`20260802T125025+0500/baseline.md`](../.agent/state/20260802T125025+0500/baseline.md).
+or rewritten. The pre-completion inventory informed this index, but its private
+local-path state snapshots are intentionally excluded from the public tree.
 
 ## Immutable local evidence
 

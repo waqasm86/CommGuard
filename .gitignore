@@ -8,6 +8,7 @@ __pycache__/
 .coverage
 build/
 dist/
+.agent/state/
 artifacts/*
 !artifacts/README.md
 notebooks/.ipynb_checkpoints/

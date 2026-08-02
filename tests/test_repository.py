@@ -105,6 +105,53 @@ def test_delivery_policy_scan_passes() -> None:
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_delivery_policy_rejects_tracked_personal_media_path(tmp_path) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    leaked_path = "/" + "media/example/private/project.txt"
+    (tmp_path / "public.md").write_text(f"local source: {leaked_path}\n", encoding="utf-8")
+    subprocess.run(["git", "add", "public.md"], cwd=tmp_path, check=True)
+
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "tools/verify_delivery.py"), "--root", str(tmp_path)],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "public.md contains prohibited personal path/link" in result.stdout
+
+
+def test_agent_state_is_ignored_untracked_and_not_scanner_exempt() -> None:
+    ignored = subprocess.run(
+        ["git", "check-ignore", "-q", ".agent/state/private.md"],
+        cwd=ROOT,
+        check=False,
+    )
+    tracked = subprocess.run(
+        ["git", "ls-files", ".agent/state"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    pending_deletions = subprocess.run(
+        ["git", "diff", "--name-only", "--diff-filter=D"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    scanner = (ROOT / "tools/verify_delivery.py").read_text(encoding="utf-8")
+
+    assert ignored.returncode == 0
+    tracked_paths = set(tracked.stdout.splitlines())
+    deleted_paths = set(pending_deletions.stdout.splitlines())
+    assert not tracked_paths or tracked_paths <= deleted_paths
+    assert ".agent/state" not in scanner
+
+
 def test_core_install_has_no_forced_dependencies() -> None:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text())
     assert project["project"]["name"] == "commguard"
