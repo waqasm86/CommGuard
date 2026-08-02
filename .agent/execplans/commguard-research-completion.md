@@ -121,9 +121,9 @@ Acceptance: all available CPU, lint, format, build, import, CLI, notebook, secre
   historical byte sizes and SHA-256 hashes matched; canonical notebooks were
   deterministic and output-free; `git diff --check` and strict `git fsck`
   passed (with only pre-existing unreachable blobs reported).
-- [ ] `2026-08-02` Push only
-  `codex/fix-calibration-idle-and-kaggle-workflow`, confirm its upstream/remote
-  URL, and leave merge/Kaggle execution to the human gates.
+- [x] `2026-08-02` Pushed only
+  `codex/fix-calibration-idle-and-kaggle-workflow`, configured its matching
+  origin upstream, and left merge and all Kaggle execution to the human gates.
 
 - [x] `2026-08-02` Re-audited the authoritative checkout at completion commit
   `5ac130c322df7c1c9c359ae2d568d515c153d1b0`, verified the Git remote/history,
