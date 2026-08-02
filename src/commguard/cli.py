@@ -46,7 +46,7 @@ def _parser() -> argparse.ArgumentParser:
     calibrate.add_argument("--output", type=Path, default=Path("artifacts"))
     calibrate.add_argument("--payload-mib", type=int, nargs="+", default=[1, 4, 16, 64])
     calibrate.add_argument("--collective", default="all_reduce")
-    calibrate.add_argument("--repetitions", type=int, default=1)
+    calibrate.add_argument("--repetitions", type=int, default=3)
     calibrate.add_argument("--timeout", type=float, default=180)
 
     run = subparsers.add_parser("run", help="run one workload or a profile")

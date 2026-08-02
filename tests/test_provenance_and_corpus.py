@@ -224,7 +224,23 @@ def test_matrix_reuses_one_context_for_calibration_and_runs(tmp_path, monkeypatc
         planned = CorpusManifest.from_dict(json.loads(plan_files[0].read_text()))
         assert planned.accepted_run_ids == ()
         assert all(plan.accepted_run_id is None for plan in planned.planned_runs)
-        return {"status": "supported", "path": "calibration.json"}
+        context = kwargs["provenance"]
+        return {
+            "status": "supported",
+            "path": "calibration.json",
+            "reference": {
+                "calibration_artifact_path": "results/calibration.json",
+                "calibration_sha256": "a" * 64,
+                "calibration_experiment_session_id": context.experiment_session_id,
+                "calibration_collection_id": context.collection_id,
+                "calibration_environment_fingerprint": "environment-test",
+                "calibration_source_commit": context.source_commit,
+                "calibration_schema_version": CURRENT_SCHEMA_VERSION,
+                "calibration_status": "supported",
+                "calibration_relationship": "current_session",
+                "calibration_created_in_current_session": True,
+            },
+        }
 
     def experiment(*args, **kwargs):
         nonlocal run_number
@@ -238,6 +254,7 @@ def test_matrix_reuses_one_context_for_calibration_and_runs(tmp_path, monkeypatc
     monkeypatch.setattr(orchestrator, "run_calibration_sweep", calibration)
     monkeypatch.setattr(orchestrator, "run_experiment", experiment)
     monkeypatch.setattr(orchestrator, "profile_workloads", lambda profile: ["ddp_train"])
+    monkeypatch.setattr(orchestrator, "verify_calibration_reference", lambda *args, **kwargs: None)
 
     summary = orchestrator.run_matrix("smoke", output=tmp_path, repetitions=2)
 
@@ -262,3 +279,5 @@ def test_matrix_reuses_one_context_for_calibration_and_runs(tmp_path, monkeypatc
         json.loads((tmp_path / summary["final_corpus_manifest"]).read_text())
     )
     assert final.accepted_run_ids == ("run-ddp_train-1", "run-ddp_train-2")
+    assert final.calibration_reference == summary["calibration_reference"]
+    assert summary["feature_extraction"]["calibration_reference"] == final.calibration_reference

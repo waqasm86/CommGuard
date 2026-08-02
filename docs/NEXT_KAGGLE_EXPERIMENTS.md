@@ -7,11 +7,13 @@ corpus and grouped detector evaluation have not been executed on Kaggle.
 
 Run the notebooks in this order on a Kaggle `GPU T4 x2` accelerator:
 
-1. `commguard_calibration_v3.ipynb` measures repeated
-   collective payload groups, then exports the calibration evidence bundle.
-2. `commguard_benign_corpus_v2.ipynb` restores that hash-verified calibration
-   bundle, runs a smoke pilot by default, and exposes the full 24-run standard
-   corpus as an explicit opt-in.
+1. `commguard_calibration_v3.ipynb` measures three idle repetitions and three
+   collective repetitions at 1, 4, 16, and 64 MiB, then exports the calibration
+   evidence bundle and its exact artifact hash/reference.
+2. `commguard_benign_corpus_v2.ipynb` restores that hash-verified prior-session
+   bundle, runs a fresh current-session calibration as the actual gate, records
+   both roles without interchanging them, runs a smoke pilot by default, and
+   exposes the full 24-run standard corpus as an explicit opt-in.
 3. `commguard_detector_evaluation_v2.ipynb` restores the combined bundle and runs
    grouped feature evaluation only after the required corpus is present.
 4. `commguard_adversarial_redteam_v1.ipynb` requires a passing benign evaluation

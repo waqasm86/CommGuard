@@ -2,6 +2,8 @@
 
 ## Unreleased (0.2.0 candidate)
 
+- Require idle-aware three-repetition calibration at 1/4/16/64 MiB for new
+  evidence, and bind benign/evaluation artifacts to one hash-verified calibration.
 - Add explicit session/collection/corpus/node provenance, schema-2 legacy
   migration, declared corpus membership, per-plan coverage, timestamp-aligned
   features, duration evidence, and strict 30-second primary gates.

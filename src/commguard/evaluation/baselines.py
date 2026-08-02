@@ -12,6 +12,7 @@ from typing import Any
 
 from commguard.adversarial import AdversarialHoldoutPlan
 from commguard.artifacts import ArtifactStore
+from commguard.calibration import verify_calibration_reference
 from commguard.evaluation.splits import audit_leakage, make_split_plan
 from commguard.exceptions import CalibrationError
 from commguard.features import (
@@ -669,19 +670,39 @@ def evaluate_detector(
 ) -> dict[str, Any]:
     """Fit transparent baselines on saved feature rows using whole-run splits."""
     root = Path(input_root)
-    calibration_paths = sorted((root / "results").glob("calibration-*.json"))
-    calibration = (
-        json.loads(calibration_paths[-1].read_text(encoding="utf-8")) if calibration_paths else None
-    )
-    if not negative_calibration_mode and (
-        calibration is None or calibration.get("status") != "supported"
-    ):
-        reason = "missing" if calibration is None else str(calibration.get("status"))
-        raise CalibrationError(
-            f"detector fitting blocked because calibration is {reason}; "
-            "use explicit negative-calibration mode only for negative-result analysis"
-        )
     extraction = load_extraction_result(root, benign_extraction_summary)
+    calibration_reference = extraction.calibration_reference
+    calibration: dict[str, Any] | None = None
+    calibration_path: Path | None = None
+    if calibration_reference is None:
+        if not negative_calibration_mode:
+            raise CalibrationError(
+                "detector fitting blocked because the extraction calibration reference "
+                "is missing; legacy evidence requires explicit negative-calibration mode"
+            )
+    else:
+        sessions = {
+            str(record.experiment_session_id)
+            for record in extraction.coverage
+            if record.experiment_session_id
+        }
+        environments = {
+            str(row["environment_fingerprint"])
+            for row in extraction.features
+            if row.get("environment_fingerprint")
+        }
+        source_commits = {
+            str(row["source_commit"]) for row in extraction.features if row.get("source_commit")
+        }
+        calibration_path, calibration = verify_calibration_reference(
+            root,
+            calibration_reference,
+            expected_experiment_session_ids=sessions or None,
+            expected_environment_fingerprints=environments or None,
+            expected_source_commits=source_commits or None,
+            require_current_session=not negative_calibration_mode,
+            allow_legacy=negative_calibration_mode,
+        )
     coverage_gate = require_primary_coverage(
         extraction,
         required_families=required_families,
@@ -764,6 +785,10 @@ def evaluate_detector(
         "actual_split_strategy": split_plan.actual_strategy,
         "split_plan": split_plan.to_dict(),
         "calibration_status": calibration.get("status") if calibration else "missing",
+        "calibration_reference": calibration_reference,
+        "calibration_artifact": (
+            str(calibration_path.relative_to(root)) if calibration_path is not None else None
+        ),
         "negative_calibration_mode": negative_calibration_mode,
         "feature_source": (
             str(benign_extraction_summary)

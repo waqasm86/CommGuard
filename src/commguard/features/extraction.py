@@ -35,6 +35,7 @@ METADATA_COLUMNS = {
     "collection_id",
     "corpus_id",
     "node_id",
+    "source_commit",
     "environment_fingerprint",
     "session_fingerprint",
     "legacy_grouping_ambiguous",
@@ -266,6 +267,8 @@ def _feature_window(
         "corpus_id": manifest.get("corpus_id")
         or (corpus.corpus_id if corpus is not None else None),
         "node_id": manifest.get("node_id") or (corpus.node_id if corpus is not None else None),
+        "source_commit": manifest.get("source_commit")
+        or (corpus.source_commit if corpus is not None else None),
         "environment_fingerprint": environment_fingerprint,
         "session_fingerprint": environment_fingerprint,
         "legacy_grouping_ambiguous": bool(
@@ -871,6 +874,9 @@ def extract_feature_result(
         corpus.corpus_id,
         windows,
         selected_designations=selected_designations,
+        calibration_reference=(
+            dict(corpus.calibration_reference) if corpus.calibration_reference is not None else None
+        ),
     )
     if output is not None:
         store = ArtifactStore(output)

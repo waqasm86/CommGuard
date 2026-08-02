@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
+from commguard.exceptions import CalibrationError
 from commguard.reporting import generate_report
 
 
@@ -100,3 +103,20 @@ def test_report_retains_legacy_pcie_primary_boundary(tmp_path) -> None:
 
     assert "primary `pcie_only_legacy` result" in report
     assert "combined-signal best baseline" not in report
+
+
+def test_report_refuses_ambiguous_legacy_calibration_filename_order(tmp_path) -> None:
+    results = tmp_path / "results"
+    results.mkdir()
+    legacy = {
+        "artifact_kind": "calibration_result",
+        "schema_version": "1.0",
+        "status": "supported",
+        "observations": [],
+        "falsification_reasons": [],
+    }
+    for name in ("calibration-a.json", "calibration-z.json"):
+        (results / name).write_text(json.dumps(legacy), encoding="utf-8")
+
+    with pytest.raises(CalibrationError, match="refusing filename-order selection"):
+        generate_report(tmp_path)

@@ -32,6 +32,9 @@ run allow-list. A run can fill at most one slot, and designation-aware selection
 prevents calibration controls from leaking into benign evaluation. Matrix
 orchestration writes a plan manifest before execution with an empty allow-list,
 then a separate final manifest after execution; neither artifact is rewritten.
+The final benign manifest carries an exact calibration reference: artifact-root
+relative path, SHA-256, experiment session, collection, environment fingerprint,
+source commit, schema, status, and current/prior-session relationship.
 
 ## Telemetry sample
 
@@ -71,6 +74,13 @@ selection remains the default; a deliberately combined benign/adversarial
 corpus may request both without relabeling either designation. Calibration
 remains excluded unless it is separately and explicitly selected.
 
+New benign extraction summaries copy the final manifest's calibration reference
+so detector evaluation can verify one exact artifact before coverage/model work.
+Wrong hashes, missing files, incompatible schemas/source commits, and unintended
+session or hardware relationships are hard failures. Schema-1 evidence remains
+readable for explicitly labeled historical/negative reporting but is never
+upgraded into a modern capture-gate pass.
+
 Loaders can bind an exact extraction-summary path within an artifact root. This
 prevents a later adversarial extraction from silently replacing the benign
 coverage source merely because it has the newest timestamp. Evaluation applies
@@ -99,6 +109,12 @@ Workload events retain rank-local progress and checksums. Feature rows retain
 split metadata separately from numeric features. Split assignments map a whole
 run to one split. Evaluation and calibration results record their thresholds,
 metrics, grouping unit, limitations, and source artifacts.
+
+Schema-2 calibration results distinguish `idle_baseline` and `collective`
+observations and record repetition/capture thresholds, per-payload capture
+rates, idle completeness, monotonicity, dynamic range, a decision state, and
+whether the modern capture gate passed. A schema-2 `supported` result requires
+the idle-aware gate. Legacy compatibility is confined to schema 1.
 
 Completed version 2 adversarial run manifests additionally require a
 `strategy_summary` and peak-memory evidence from both ranks. Expected/actual

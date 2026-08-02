@@ -9,7 +9,7 @@ from commguard.evaluation import (
     make_split_plan,
 )
 from commguard.evaluation.baselines import _evaluate_ablation, _select_model_and_threshold
-from commguard.exceptions import CalibrationError
+from commguard.exceptions import CoverageError
 
 
 def rows(sessions: int = 1) -> list[dict]:
@@ -255,5 +255,5 @@ def test_leakage_audit_rejects_identity_feature() -> None:
 
 
 def test_detector_fitting_requires_calibration(tmp_path) -> None:
-    with pytest.raises(CalibrationError, match="calibration is missing"):
+    with pytest.raises(CoverageError, match="no feature extraction coverage summary"):
         evaluate_detector(tmp_path)

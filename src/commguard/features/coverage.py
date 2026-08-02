@@ -150,6 +150,7 @@ class ExtractionResult:
     requested_window_seconds: tuple[float, ...]
     selection_mode: str = "declared_corpus_manifest"
     selected_designations: tuple[str, ...] = ("benign",)
+    calibration_reference: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         for record in self.coverage:
@@ -184,6 +185,7 @@ class ExtractionResult:
             "corpus_id": self.corpus_id,
             "selection_mode": self.selection_mode,
             "selected_designations": list(self.selected_designations),
+            "calibration_reference": self.calibration_reference,
             "requested_window_seconds": list(self.requested_window_seconds),
             "planned_run_count": len(self.coverage),
             "included_run_count": sum(record.status == "included" for record in self.coverage),
@@ -251,6 +253,7 @@ def load_extraction_result(
         ),
         selection_mode=str(summary["selection_mode"]),
         selected_designations=tuple(summary.get("selected_designations", ("benign",))),
+        calibration_reference=summary.get("calibration_reference"),
     )
 
 

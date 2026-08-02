@@ -255,10 +255,12 @@ def test_segmented_series_plans_real_process_segments_before_launch(tmp_path, mo
     gaps = []
     monkeypatch.setattr(orchestrator, "run_experiment", experiment)
     monkeypatch.setattr(orchestrator.time, "sleep", gaps.append)
+    monkeypatch.setattr(orchestrator, "verify_calibration_reference", lambda *args, **kwargs: None)
 
     summary = orchestrator.run_segmented_series(
         output=tmp_path,
         adversarial_approval=True,
+        calibration_reference={},
     )
 
     assert len(observed) == 4

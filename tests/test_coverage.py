@@ -363,6 +363,7 @@ def test_detector_refuses_incomplete_coverage_before_fitting(tmp_path) -> None:
         evaluate_detector(
             tmp_path,
             required_families=("ddp_training", "control_idle"),
+            negative_calibration_mode=True,
         )
 
 

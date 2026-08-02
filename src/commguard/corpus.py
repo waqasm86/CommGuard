@@ -74,6 +74,7 @@ class CorpusManifest:
     notebook_version: str | None
     input_archive_sha256: str | None
     random_seed: int
+    calibration_reference: Mapping[str, Any] | None = None
     schema_version: str = CURRENT_SCHEMA_VERSION
     artifact_kind: str = "corpus_manifest"
 
@@ -99,6 +100,34 @@ class CorpusManifest:
             or re.fullmatch(r"[0-9a-f]{64}", self.input_archive_sha256) is not None,
             "corpus.input_archive_sha256: must be 64 lowercase hexadecimal characters",
         )
+        if self.calibration_reference is not None:
+            from commguard.calibration import CALIBRATION_REFERENCE_FIELDS
+
+            missing = sorted(set(CALIBRATION_REFERENCE_FIELDS) - set(self.calibration_reference))
+            _require(
+                not missing,
+                f"corpus.calibration_reference: missing fields {missing}",
+            )
+            reference = self.calibration_reference
+            path = str(reference["calibration_artifact_path"])
+            _require(
+                bool(path) and not path.startswith("/") and ".." not in path.split("/"),
+                "corpus.calibration_reference.calibration_artifact_path: invalid",
+            )
+            _require(
+                re.fullmatch(r"[0-9a-f]{64}", str(reference["calibration_sha256"])) is not None,
+                "corpus.calibration_reference.calibration_sha256: invalid",
+            )
+            relationship = reference["calibration_relationship"]
+            _require(
+                relationship in {"current_session", "prior_session"},
+                "corpus.calibration_reference.calibration_relationship: invalid",
+            )
+            _require(
+                reference["calibration_created_in_current_session"]
+                is (relationship == "current_session"),
+                "corpus.calibration_reference: current/prior labels conflict",
+            )
         plan_ids = [item.plan_id for item in self.planned_runs]
         _require(
             len(plan_ids) == len(set(plan_ids)),
@@ -138,6 +167,7 @@ class CorpusManifest:
             notebook_version=data.get("notebook_version"),
             input_archive_sha256=data.get("input_archive_sha256"),
             random_seed=int(data.get("random_seed", -1)),
+            calibration_reference=data.get("calibration_reference"),
             schema_version=str(data.get("schema_version", "")),
             artifact_kind=str(data.get("artifact_kind", "")),
         )

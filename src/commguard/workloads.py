@@ -38,6 +38,16 @@ BASE_MODEL = {
 }
 
 WORKLOADS: dict[str, dict[str, Any]] = {
+    "calibration_idle": {
+        "config_id": "calibration-idle-15s-v1",
+        "mode": "idle",
+        "label": "calibration",
+        "family": "calibration_idle",
+        "designation": "calibration",
+        "duration_s": 15.0,
+        "estimated_seconds": 15,
+        "warmup_seconds": 0.0,
+    },
     "collective_all_reduce_1mib": {
         "config_id": "calibration-all-reduce-1mib-v1",
         "mode": "calibration",

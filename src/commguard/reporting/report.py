@@ -7,6 +7,9 @@ from pathlib import Path
 from typing import Any
 
 from commguard.artifacts import sha256_file
+from commguard.calibration import verify_calibration_reference
+from commguard.exceptions import CalibrationError
+from commguard.schemas import LEGACY_SCHEMA_VERSION
 
 NON_AFFILIATION = (
     "This is an independent, unofficial research prototype. It is not affiliated with or "
@@ -36,6 +39,27 @@ def _latest_json(directory: Path, pattern: str) -> dict[str, Any] | None:
 def _latest_path(directory: Path, pattern: str) -> Path | None:
     paths = sorted(directory.glob(pattern))
     return paths[-1] if paths else None
+
+
+def _calibration_for_report(
+    root: Path,
+    matrix: dict[str, Any] | None,
+) -> tuple[Path | None, dict[str, Any] | None, bool]:
+    reference = matrix.get("calibration_reference") if matrix else None
+    if isinstance(reference, dict):
+        path, calibration = verify_calibration_reference(root, reference)
+        return path, calibration, False
+    candidates = sorted((root / "results").glob("calibration-*.json"))
+    if not candidates:
+        return None, None, False
+    legacy = [(path, json.loads(path.read_text(encoding="utf-8"))) for path in candidates]
+    legacy = [item for item in legacy if item[1].get("schema_version") == LEGACY_SCHEMA_VERSION]
+    if len(candidates) != 1 or len(legacy) != 1:
+        raise CalibrationError(
+            "reporting found calibration artifacts without one exact modern reference; "
+            "refusing filename-order selection"
+        )
+    return legacy[0][0], legacy[0][1], True
 
 
 def _metric(value: Any) -> str:
@@ -81,13 +105,12 @@ def generate_report(
     manifest_paths = sorted((root / "runs").glob("*/manifest.json"))
     manifests = [json.loads(path.read_text(encoding="utf-8")) for path in manifest_paths]
     preflight_path = _latest_path(root / "environment", "preflight-*.json")
-    calibration_path = _latest_path(root / "results", "calibration-*.json")
     evaluation_path = _latest_path(root / "results", "evaluation-*.json")
     matrix_path = _latest_path(root / "results", "matrix-*.json")
     preflight = _latest_json(root / "environment", "preflight-*.json")
-    calibration = _latest_json(root / "results", "calibration-*.json")
     evaluation = _latest_json(root / "results", "evaluation-*.json")
     matrix = _latest_json(root / "results", "matrix-*.json")
+    calibration_path, calibration, calibration_is_legacy = _calibration_for_report(root, matrix)
     completed = [item for item in manifests if item["exit_status"] == "completed"]
     failed = [item for item in manifests if item["exit_status"] != "completed"]
     lines = [
@@ -295,6 +318,11 @@ def generate_report(
             f"Falsification reasons: "
             f"{'; '.join(calibration['falsification_reasons']) or 'none recorded'}.",
         ]
+        if calibration_is_legacy:
+            lines.append(
+                "**Legacy compatibility:** This schema-1 decision is reported under its "
+                "historical contract and did not pass the modern idle-aware capture gate."
+            )
     else:
         lines += ["Calibration has not been recorded; detector escalation is unsupported."]
     if failed:

@@ -494,6 +494,7 @@ def validate_artifact(data: Mapping[str, Any]) -> None:
                     "collection_id",
                     "corpus_id",
                     "node_id",
+                    "source_commit",
                     "environment_fingerprint",
                     "workload_config_id",
                     "aligned_sample_pairs",
@@ -505,6 +506,7 @@ def validate_artifact(data: Mapping[str, Any]) -> None:
                 "collection_id",
                 "corpus_id",
                 "node_id",
+                "source_commit",
                 "environment_fingerprint",
                 "workload_config_id",
             ):
@@ -558,6 +560,65 @@ def validate_artifact(data: Mapping[str, Any]) -> None:
             "must be supported, partially_supported, or not_supported",
         )
         _require(isinstance(data["observations"], list), "observations", "must be an array")
+        if data.get("schema_version") == CURRENT_SCHEMA_VERSION:
+            _require_fields(
+                data,
+                "calibration_result",
+                (
+                    "calibration_contract_version",
+                    "legacy_compatibility_applied",
+                    "modern_capture_gate_passed",
+                    "decision_state",
+                    "idle_baseline_repetitions",
+                    "idle_baseline_usable_repetitions",
+                    "idle_baseline_complete",
+                    "capture_gate_applied",
+                    "capture_threshold_bytes_per_s",
+                    "payload_summaries",
+                    "thresholds",
+                    "experiment_session_id",
+                    "collection_id",
+                    "environment_fingerprint",
+                    "source_commit",
+                ),
+            )
+            _require(
+                data["calibration_contract_version"] == "idle-aware-repeated-v2",
+                "calibration_contract_version",
+                "must be idle-aware-repeated-v2",
+            )
+            _require(
+                data["legacy_compatibility_applied"] is False,
+                "legacy_compatibility_applied",
+                "new evidence cannot use legacy compatibility",
+            )
+            _require(
+                data["decision_state"] in {"passed", "inconclusive", "failed"},
+                "decision_state",
+                "must be passed, inconclusive, or failed",
+            )
+            for index, observation in enumerate(data["observations"]):
+                _require(
+                    observation.get("observation_type") in {"idle_baseline", "collective"},
+                    f"observations[{index}].observation_type",
+                    "must be idle_baseline or collective",
+                )
+            if data["status"] == "supported":
+                _require(
+                    data["modern_capture_gate_passed"] is True,
+                    "modern_capture_gate_passed",
+                    "supported modern evidence must pass the capture gate",
+                )
+                _require(
+                    data["capture_gate_applied"] is True,
+                    "capture_gate_applied",
+                    "supported modern evidence requires an idle-derived gate",
+                )
+                _require(
+                    data["idle_baseline_complete"] is True,
+                    "idle_baseline_complete",
+                    "supported modern evidence requires repeated idle observations",
+                )
     elif kind == "experiment_summary":
         _require_fields(data, "experiment_summary", ("summary_type",))
     elif kind == "corpus_manifest":

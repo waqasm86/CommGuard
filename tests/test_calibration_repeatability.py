@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from commguard.calibration import analyze_calibration
-from commguard.schemas import validate_artifact
+from commguard.schemas import LEGACY_SCHEMA_VERSION, validate_artifact
 
 
 def row(
@@ -28,8 +28,13 @@ def repeated(payload: float, signals: list[float]) -> list[dict[str, Any]]:
 
 
 def test_repetition_aware_calibration_is_fully_supported() -> None:
-    rows = [row(0, 100_000, idle=True), row(0, 120_000, idle=True)]
+    rows = [
+        row(0, 100_000, idle=True),
+        row(0, 110_000, idle=True),
+        row(0, 120_000, idle=True),
+    ]
     rows += repeated(1, [2_000_000, 2_100_000, 1_900_000])
+    rows += repeated(4, [3_000_000, 3_100_000, 2_900_000])
     rows += repeated(16, [4_000_000, 4_100_000, 3_900_000])
     rows += repeated(64, [8_000_000, 8_100_000, 7_900_000])
 
@@ -37,7 +42,7 @@ def test_repetition_aware_calibration_is_fully_supported() -> None:
 
     assert result["status"] == "supported"
     assert result["capture_gate_applied"] is True
-    assert result["supported_payload_range_mib"] == [1.0, 16.0, 64.0]
+    assert result["supported_payload_range_mib"] == [1.0, 4.0, 16.0, 64.0]
     assert result["unreliable_payload_range_mib"] == []
     assert result["spearman_rank_correlation"] == 1
     assert result["dynamic_range_ratio"] == 4
@@ -45,7 +50,11 @@ def test_repetition_aware_calibration_is_fully_supported() -> None:
 
 
 def test_partial_when_small_payloads_are_missed() -> None:
-    rows = [row(0, 1_000, idle=True), row(0, 1_200, idle=True)]
+    rows = [
+        row(0, 1_000, idle=True),
+        row(0, 1_100, idle=True),
+        row(0, 1_200, idle=True),
+    ]
     rows += repeated(1, [1_100, 1_050, 4_000_000])
     rows += repeated(64, [8_000_000, 8_100_000, 7_900_000])
 
@@ -61,29 +70,47 @@ def test_partial_when_small_payloads_are_missed() -> None:
     assert result["unreliable_payload_range_mib"] == [1.0]
     assert result["payload_summaries"][0]["capture_success_count"] == 1
     assert result["payload_summaries"][0]["capture_rate"] == 1 / 3
+    result.update(
+        {
+            "experiment_session_id": "session-test",
+            "collection_id": "collection-test",
+            "environment_fingerprint": "environment-test",
+            "source_commit": "a" * 40,
+        }
+    )
     validate_artifact(result)
 
 
-def test_no_idle_rows_use_explicit_compatibility_mode() -> None:
+def test_no_idle_rows_fail_the_modern_capture_gate() -> None:
+    result = analyze_calibration(
+        repeated(1, [2_000_000, 2_100_000, 1_900_000])
+        + repeated(4, [4_000_000, 4_100_000, 3_900_000])
+        + repeated(16, [8_000_000, 8_100_000, 7_900_000]),
+    )
+
+    assert result["status"] == "not_supported"
+    assert result["capture_gate_applied"] is False
+    assert result["capture_threshold_bytes_per_s"] is None
+    assert result["modern_capture_gate_passed"] is False
+    assert "requires explicit idle baseline" in " ".join(result["falsification_reasons"])
+
+
+def test_legacy_evidence_compatibility_is_explicit_and_not_a_modern_pass() -> None:
     result = analyze_calibration(
         [row(1, 100), row(4, 200), row(16, 500)],
-        minimum_repetitions=1,
+        legacy_compatibility=True,
     )
 
     assert result["status"] == "supported"
-    assert result["capture_gate_applied"] is False
-    assert result["capture_threshold_bytes_per_s"] is None
-    assert "backward compatibility" in result["capture_gate_note"]
-    assert [item["capture_success_count"] for item in result["payload_summaries"]] == [
-        1,
-        1,
-        1,
-    ]
-    assert "legacy compatibility mode" in result["limitations"][-1]
+    assert result["schema_version"] == LEGACY_SCHEMA_VERSION
+    assert result["legacy_compatibility_applied"] is True
+    assert result["modern_capture_gate_passed"] is False
+    assert result["decision_state"] == "legacy_compatible"
+    assert "historical contract" in result["claim"]
 
 
 def test_invalid_participation_is_excluded_from_usable_repetitions() -> None:
-    rows = [row(0, 10, idle=True)]
+    rows = [row(0, 10, idle=True), row(0, 12, idle=True)]
     rows += [row(1, 2_000_000), row(1, 9_000_000, participation_valid=False)]
     rows += repeated(4, [4_000_000, 4_100_000])
     rows += repeated(16, [8_000_000, 8_100_000])
@@ -98,7 +125,7 @@ def test_invalid_participation_is_excluded_from_usable_repetitions() -> None:
 
 
 def test_unsupported_pcie_is_a_hard_falsification() -> None:
-    rows = [row(0, 10, idle=True)]
+    rows = [row(0, 10, idle=True), row(0, 12, idle=True)]
     rows += repeated(1, [2_000_000, 2_100_000])
     rows += repeated(4, [4_000_000, 4_100_000])
     rows += repeated(16, [8_000_000, 8_100_000])
@@ -111,7 +138,7 @@ def test_unsupported_pcie_is_a_hard_falsification() -> None:
 
 
 def test_missing_values_do_not_crash_and_are_reported() -> None:
-    rows = [row(0, 10, idle=True)]
+    rows = [row(0, 10, idle=True), row(0, 12, idle=True)]
     rows += repeated(1, [2_000_000, 2_100_000])
     rows += repeated(4, [4_000_000, 4_100_000])
     rows += repeated(16, [8_000_000, 8_100_000])
@@ -187,3 +214,29 @@ def test_unusable_idle_rows_do_not_silently_disable_capture_gate() -> None:
 
     assert result["status"] == "not_supported"
     assert "idle baseline rows" in " ".join(result["falsification_reasons"])
+
+
+def test_single_repetition_is_inconclusive_not_supported() -> None:
+    rows = [row(0, 100_000, idle=True)]
+    rows += [row(1, 2_000_000), row(4, 4_000_000), row(16, 8_000_000)]
+
+    result = analyze_calibration(rows)
+
+    assert result["status"] != "supported"
+    assert result["modern_capture_gate_passed"] is False
+    assert "at least 3 are required" in " ".join(result["falsification_reasons"])
+
+
+def test_nonfinite_and_invalid_readings_are_rejected_deterministically() -> None:
+    rows = [row(0, 100_000, idle=True) for _ in range(3)]
+    rows += repeated(1, [2_000_000, float("nan"), 2_100_000])
+    rows += repeated(4, [4_000_000, float("inf"), 4_100_000])
+    rows += repeated(16, [8_000_000, -1.0, 8_100_000])
+
+    first = analyze_calibration(rows)
+    second = analyze_calibration(reversed(rows))
+
+    assert first["status"] != "supported"
+    assert first["falsification_reasons"] == second["falsification_reasons"]
+    assert first["payload_summaries"] == second["payload_summaries"]
+    assert "no usable PCIe reading" in " ".join(first["falsification_reasons"])

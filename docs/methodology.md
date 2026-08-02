@@ -19,15 +19,25 @@ Sampling defaults to 1 Hz. The collector records actual intervals, jitter,
 overruns, field missingness, and a conservative sampler duty fraction. Short
 controls can compare 1, 2, and 10 Hz; this is not enabled during normal runs.
 
-Calibration records idle-baseline observations and repeated nominal collective
-payload groups. It tests per-payload capture rate and repetition count as well
-as median-signal rank correlation and dynamic range. Per-payload summaries also
+Calibration records three idle-baseline observations and three repetitions at
+each of 1, 4, 16, and 64 MiB in the standard path. Its idle-relative capture
+threshold, per-payload 80% capture rate, minimum repetitions, rank correlation,
+and dynamic-range criteria are specified in
+[`nvidia-calibration.md`](nvidia-calibration.md). Per-payload summaries also
 report mean, median absolute deviation, and coefficient of variation. These
 thresholds are pragmatic gates, not universal physical laws. Calibration can be
-`supported`, `partially_supported`, or `not_supported`; partial support applies
-only to the reported reliable payload groups. Calibration failure prevents
+`supported`, `partially_supported` (inconclusive), or `not_supported`; partial
+support applies only to the reported reliable payload groups. Missing idle data
+or one-shot payloads cannot support new evidence. Calibration failure prevents
 standard/extended detector collection unless explicit negative-calibration
 research mode is selected.
+
+The final corpus manifest and feature-extraction summary bind the exact current-
+session calibration path, SHA-256, session/collection/environment/source/schema
+metadata, status, and current-versus-prior-session label. Evaluation verifies
+that reference and never discovers calibration by filename order. A restored
+prior-session calibration is provenance input only; the fresh current-session
+calibration is the collection gate.
 
 Feature extraction requires an explicit versioned corpus manifest and produces
 one coverage decision for every planned slot. Calibration-designated controls

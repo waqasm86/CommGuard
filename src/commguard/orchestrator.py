@@ -15,7 +15,13 @@ from typing import Any
 
 from commguard.adversarial import AdversarialHoldoutPlan, strategy_for_config
 from commguard.artifacts import ArtifactStore
-from commguard.calibration import analyze_calibration
+from commguard.calibration import (
+    STANDARD_CALIBRATION_PAYLOAD_MIB,
+    STANDARD_CALIBRATION_REPETITIONS,
+    analyze_calibration,
+    build_calibration_reference,
+    verify_calibration_reference,
+)
 from commguard.corpus import CorpusManifest, PlannedRun
 from commguard.distributed.launcher import LaunchResult, launch_torchrun
 from commguard.environment.preflight import check_environment
@@ -348,15 +354,53 @@ def run_experiment(
 
 def run_calibration_sweep(
     output: str | Path = "artifacts",
-    payload_mib: tuple[int, ...] = (1, 4, 16, 64),
+    payload_mib: tuple[int, ...] = STANDARD_CALIBRATION_PAYLOAD_MIB,
     collective: str = "all_reduce",
-    repetitions: int = 1,
+    repetitions: int = STANDARD_CALIBRATION_REPETITIONS,
     timeout_s: float = 180.0,
     provenance: ProvenanceContext | None = None,
 ) -> dict[str, Any]:
+    if repetitions < 1:
+        raise ValueError("calibration repetitions must be at least one")
+    if not payload_mib or any(payload <= 0 for payload in payload_mib):
+        raise ValueError("calibration payloads must be positive")
+    if len(payload_mib) != len(set(payload_mib)):
+        raise ValueError("calibration payloads must be unique")
     context = provenance or ProvenanceContext.create(corpus_id=new_corpus_id("calibration"))
     observations: list[dict[str, Any]] = []
+
+    def observe(outcome: dict[str, Any], **identity: Any) -> dict[str, Any]:
+        return {
+            "run_id": outcome["run_id"],
+            **identity,
+            "participation_valid": outcome["manifest"]["participation_valid"],
+            "exit_status": outcome["manifest"]["exit_status"],
+            "pcie_supported": outcome["pcie_supported"],
+            "pcie_total_mean_bytes_per_s": outcome["pcie_total_mean_bytes_per_s"],
+            "pcie_total_median_bytes_per_s": outcome["pcie_total_median_bytes_per_s"],
+            "pcie_sample_count": outcome["pcie_sample_count"],
+        }
+
     for repetition in range(repetitions):
+        idle_outcome = run_experiment(
+            "calibration_idle",
+            output=output,
+            overrides={"repetition": repetition},
+            timeout_s=timeout_s,
+            strict_preflight=True,
+            raise_on_failure=False,
+            provenance=context,
+        )
+        observations.append(
+            observe(
+                idle_outcome,
+                observation_type="idle_baseline",
+                is_idle=True,
+                payload_mib=0,
+                collective=None,
+                repetition=repetition,
+            )
+        )
         for payload in payload_mib:
             outcome = run_experiment(
                 "collective_all_reduce_1mib",
@@ -372,20 +416,20 @@ def run_calibration_sweep(
                 provenance=context,
             )
             observations.append(
-                {
-                    "run_id": outcome["run_id"],
-                    "payload_mib": payload,
-                    "collective": collective,
-                    "repetition": repetition,
-                    "participation_valid": outcome["manifest"]["participation_valid"],
-                    "exit_status": outcome["manifest"]["exit_status"],
-                    "pcie_supported": outcome["pcie_supported"],
-                    "pcie_total_mean_bytes_per_s": outcome["pcie_total_mean_bytes_per_s"],
-                    "pcie_total_median_bytes_per_s": outcome["pcie_total_median_bytes_per_s"],
-                    "pcie_sample_count": outcome["pcie_sample_count"],
-                }
+                observe(
+                    outcome,
+                    observation_type="collective",
+                    is_idle=False,
+                    payload_mib=payload,
+                    collective=collective,
+                    repetition=repetition,
+                )
             )
-    result = analyze_calibration(observations)
+    result = analyze_calibration(
+        observations,
+        minimum_sizes=len(payload_mib),
+        minimum_repetitions=STANDARD_CALIBRATION_REPETITIONS,
+    )
     environment = check_environment(strict=True, provenance=context)
     result.update(
         {
@@ -403,6 +447,11 @@ def run_calibration_sweep(
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     path = store.write_json(f"results/calibration-{timestamp}.json", result)
     result["path"] = str(path)
+    result["reference"] = build_calibration_reference(
+        store.root,
+        path,
+        current_experiment_session_id=context.experiment_session_id,
+    )
     return result
 
 
@@ -410,6 +459,7 @@ def run_segmented_series(
     output: str | Path = "artifacts",
     *,
     adversarial_approval: bool = False,
+    calibration_reference: dict[str, Any] | None = None,
     timeout_s: float = 180.0,
 ) -> dict[str, Any]:
     """Run separately launched short DDP segments after an explicit human gate."""
@@ -420,15 +470,15 @@ def run_segmented_series(
             "segmented_runs is a bounded defensive red-team series; explicit approval is required"
         )
     root = Path(output)
-    calibration_paths = sorted((root / "results").glob("calibration-*.json"))
-    calibration = (
-        json.loads(calibration_paths[-1].read_text(encoding="utf-8")) if calibration_paths else None
-    )
-    if calibration is None or calibration.get("status") != "supported":
-        status = "missing" if calibration is None else str(calibration.get("status"))
+    if calibration_reference is None:
         raise CalibrationError(
-            f"segmented adversarial series requires supported calibration; observed={status}"
+            "segmented adversarial series requires an exact calibration reference"
         )
+    verify_calibration_reference(
+        root,
+        calibration_reference,
+        require_current_session=False,
+    )
     context = ProvenanceContext.create(corpus_id=new_corpus_id("segmented-runs"))
     segment_count = int(config["segment_count"])
     segment_seconds = float(config["segment_seconds"])
@@ -754,6 +804,7 @@ def plan_matrix(profile: str, repetitions: int = 1) -> tuple[PlannedRun, ...]:
 def _corpus_manifest(
     context: ProvenanceContext,
     planned_runs: tuple[PlannedRun, ...],
+    calibration_reference: dict[str, Any] | None = None,
 ) -> CorpusManifest:
     return CorpusManifest(
         corpus_id=context.corpus_id,
@@ -769,6 +820,7 @@ def _corpus_manifest(
         notebook_version=context.notebook_version,
         input_archive_sha256=context.input_archive_sha256,
         random_seed=20260730,
+        calibration_reference=calibration_reference,
     )
 
 
@@ -810,6 +862,7 @@ def run_matrix(
     negative_calibration_mode: bool = False,
     timeout_s: float = 180.0,
     provenance: ProvenanceContext | None = None,
+    prior_calibration_reference: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run a planned benign profile after a session-specific calibration gate."""
     if repetitions is None:
@@ -829,13 +882,27 @@ def run_matrix(
         timeout_s=timeout_s,
         provenance=context,
     )
-    if (
-        calibration["status"] != "supported"
-        and profile != "smoke"
-        and not negative_calibration_mode
-    ):
+    calibration_reference = dict(calibration["reference"])
+    verify_calibration_reference(
+        store.root,
+        calibration_reference,
+        expected_experiment_session_ids={context.experiment_session_id},
+        expected_environment_fingerprints={
+            str(calibration_reference["calibration_environment_fingerprint"])
+        },
+        expected_source_commits={context.source_commit},
+    )
+    if prior_calibration_reference is not None:
+        verify_calibration_reference(
+            store.root,
+            prior_calibration_reference,
+            require_current_session=False,
+        )
+        if prior_calibration_reference["calibration_relationship"] != "prior_session":
+            raise CalibrationError("supplied prior calibration must be labeled prior_session")
+    if calibration["status"] != "supported" and not negative_calibration_mode:
         raise CalibrationError(
-            f"standard/extended matrix blocked by negative calibration; see {calibration['path']}"
+            f"benign matrix blocked by negative calibration; see {calibration['path']}"
         )
     outcomes = []
     finalized_plans: list[PlannedRun] = []
@@ -854,7 +921,11 @@ def run_matrix(
             str(outcome["run_id"]) if outcome["manifest"]["exit_status"] == "completed" else None
         )
         finalized_plans.append(replace(plan, accepted_run_id=accepted_run_id))
-    final_manifest = _corpus_manifest(context, tuple(finalized_plans))
+    final_manifest = _corpus_manifest(
+        context,
+        tuple(finalized_plans),
+        calibration_reference=calibration_reference,
+    )
     final_path = store.write_json(
         f"corpora/{context.corpus_id}-final.json",
         final_manifest.to_dict(),
@@ -885,6 +956,8 @@ def run_matrix(
         "profile": profile,
         "estimate": estimate,
         "calibration_status": calibration["status"],
+        "calibration_reference": calibration_reference,
+        "prior_calibration_reference": prior_calibration_reference,
         "negative_calibration_mode": negative_calibration_mode,
         "schedule": schedule,
         "planned_corpus_manifest": str(plan_path.relative_to(store.root)),
