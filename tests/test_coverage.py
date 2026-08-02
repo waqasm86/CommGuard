@@ -209,6 +209,55 @@ def test_combined_selection_keeps_benign_and_adversarial_designations_explicit(t
     assert all(record.status == "included" for record in result.coverage)
 
 
+def test_loader_can_select_an_exact_extraction_summary(tmp_path) -> None:
+    write_run(tmp_path, "run-first", "ddp_training", "training", warmup=0, duration=6)
+    first = extract_feature_result(
+        tmp_path,
+        corpus(
+            PlannedRun(
+                "first",
+                "ddp_training",
+                "training",
+                {},
+                accepted_run_id="run-first",
+            )
+        ),
+        output=tmp_path,
+        window_lengths=(5.0,),
+    )
+    first_summary = next((tmp_path / "features").glob("extraction-*.json"))
+    write_run(tmp_path, "run-second", "control_idle", "control", warmup=0, duration=6)
+    extract_feature_result(
+        tmp_path,
+        corpus(
+            PlannedRun(
+                "second",
+                "control_idle",
+                "control",
+                {},
+                accepted_run_id="run-second",
+            )
+        ),
+        output=tmp_path,
+        window_lengths=(5.0,),
+    )
+
+    restored = load_extraction_result(
+        tmp_path,
+        first_summary.relative_to(tmp_path),
+    )
+
+    assert restored == first
+    assert {row["run_id"] for row in restored.features} == {"run-first"}
+
+
+def test_loader_rejects_an_extraction_summary_outside_artifact_root(tmp_path) -> None:
+    outside = tmp_path.parent / "outside-extraction.json"
+
+    with pytest.raises(CoverageError, match="outside artifact_root"):
+        load_extraction_result(tmp_path, outside)
+
+
 def test_short_historical_run_reports_exact_post_warmup_duration(tmp_path) -> None:
     write_run(
         tmp_path,

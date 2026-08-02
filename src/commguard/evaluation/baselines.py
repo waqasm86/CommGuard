@@ -664,6 +664,8 @@ def evaluate_detector(
     minimum_runs_per_family: int = 3,
     adversarial_holdout_plan: AdversarialHoldoutPlan | None = None,
     release_final_adversarial_holdout: bool = False,
+    benign_extraction_summary: str | Path | None = None,
+    adversarial_extraction_summary: str | Path | None = None,
 ) -> dict[str, Any]:
     """Fit transparent baselines on saved feature rows using whole-run splits."""
     root = Path(input_root)
@@ -679,7 +681,7 @@ def evaluate_detector(
             f"detector fitting blocked because calibration is {reason}; "
             "use explicit negative-calibration mode only for negative-result analysis"
         )
-    extraction = load_extraction_result(root)
+    extraction = load_extraction_result(root, benign_extraction_summary)
     coverage_gate = require_primary_coverage(
         extraction,
         required_families=required_families,
@@ -688,6 +690,11 @@ def evaluate_detector(
     import pandas as pd
 
     rows = list(extraction.features)
+    if adversarial_extraction_summary is not None:
+        adversarial_extraction = load_extraction_result(root, adversarial_extraction_summary)
+        if set(adversarial_extraction.selected_designations) != {"adversarial"}:
+            raise ValueError("adversarial extraction must select only the adversarial designation")
+        rows.extend(adversarial_extraction.features)
     benign_primary_rows, adversarial_primary_rows = _partition_primary_evaluation_rows(rows)
     feature_paths = sorted((root / "features").glob("features-*.jsonl"))
     frame = pd.DataFrame(rows)
@@ -758,7 +765,16 @@ def evaluate_detector(
         "split_plan": split_plan.to_dict(),
         "calibration_status": calibration.get("status") if calibration else "missing",
         "negative_calibration_mode": negative_calibration_mode,
-        "feature_source": str(feature_paths[-1]),
+        "feature_source": (
+            str(benign_extraction_summary)
+            if benign_extraction_summary is not None
+            else str(feature_paths[-1])
+        ),
+        "adversarial_feature_source": (
+            str(adversarial_extraction_summary)
+            if adversarial_extraction_summary is not None
+            else None
+        ),
         "coverage_gate": coverage_gate,
         "window_count": len(rows),
         "run_count": len(assignments),

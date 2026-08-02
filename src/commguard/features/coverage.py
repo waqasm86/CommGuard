@@ -199,13 +199,35 @@ class ExtractionResult:
         }
 
 
-def load_extraction_result(input_root: str | Path) -> ExtractionResult:
-    """Load the newest linked feature/coverage result from one artifact root."""
+def load_extraction_result(
+    input_root: str | Path,
+    summary_path: str | Path | None = None,
+) -> ExtractionResult:
+    """Load one linked feature/coverage result from an artifact root.
+
+    ``summary_path`` may be an artifact-root-relative path or an absolute path.
+    The newest-summary behavior is retained only for callers that omit it.
+    """
     root = Path(input_root)
-    summaries = sorted((root / "features").glob("extraction-*.json"))
-    if not summaries:
-        raise CoverageError(f"artifact_root={root} has no feature extraction coverage summary")
-    summary = load_artifact(summaries[-1])
+    if summary_path is None:
+        summaries = sorted((root / "features").glob("extraction-*.json"))
+        if not summaries:
+            raise CoverageError(f"artifact_root={root} has no feature extraction coverage summary")
+        resolved_summary_path = summaries[-1]
+    else:
+        candidate = Path(summary_path)
+        resolved_summary_path = candidate if candidate.is_absolute() else root / candidate
+        try:
+            resolved_summary_path.resolve().relative_to(root.resolve())
+        except ValueError as exc:
+            raise CoverageError(
+                f"extraction_summary={resolved_summary_path} is outside artifact_root={root}"
+            ) from exc
+        if not resolved_summary_path.is_file():
+            raise CoverageError(
+                f"artifact_root={root} has no extraction_summary={resolved_summary_path}"
+            )
+    summary = load_artifact(resolved_summary_path)
     assert isinstance(summary, dict)
     feature_rows = load_artifact(root / str(summary["feature_artifact"]))
     coverage_rows = load_artifact(root / str(summary["coverage_artifact"]))

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 try:
@@ -14,6 +16,12 @@ from commguard.reporting import generate_report
 from commguard.workloads import list_workloads
 
 ROOT = Path(__file__).resolve().parents[1]
+CANONICAL_NOTEBOOKS = [
+    "commguard_calibration_v3.ipynb",
+    "commguard_benign_corpus_v2.ipynb",
+    "commguard_detector_evaluation_v2.ipynb",
+    "commguard_adversarial_redteam_v1.ipynb",
+]
 
 
 def test_kaggle_snapshot_is_verbatim() -> None:
@@ -27,6 +35,7 @@ def test_canonical_notebook_inventory_is_valid_and_unexecuted() -> None:
     inventory = json.loads((notebook_root / "canonical_notebooks.json").read_text(encoding="utf-8"))
     names = inventory["canonical_notebooks"]
     assert inventory["schema_version"] == 1
+    assert names == CANONICAL_NOTEBOOKS
     assert len(names) == len(set(names))
     assert all("-" not in name and name.endswith(".ipynb") for name in names)
     assert (ROOT / "docs/notebook-policy.md").is_file()
@@ -45,12 +54,42 @@ def test_canonical_notebook_inventory_is_valid_and_unexecuted() -> None:
         assert "class TelemetryCollector" not in source
         assert "class ArtifactStore" not in source
         assert "drive.google.com/file/d/" not in source
+        assert "REVIEWED_COMMIT" in source
+        assert "--no-build-isolation" in source
+        assert "--no-deps" in source
+        assert 'checkout", "main' not in source
+        assert "@main" not in source
+        assert "NEXT STEP:" in source
+        assert "SHA-256" in source
+        assert notebook["metadata"]["commguard"]["required_accelerator"] == "two NVIDIA T4 GPUs"
+        for cell in code_cells:
+            compile("".join(cell["source"]), f"{name}:{cell['id']}", "exec")
+        all_source = "\n".join("".join(cell["source"]) for cell in notebook["cells"])
+        assert "## Results" in all_source
+        assert "not executed" in all_source
+        assert "def run_experiment" not in all_source
+        assert "def extract_features" not in all_source
 
-    quickstart = json.loads((notebook_root / "commguard_dual_t4.ipynb").read_text())
-    quickstart_source = "\n".join(
-        "".join(cell["source"]) for cell in quickstart["cells"] if cell["cell_type"] == "code"
+    downstream = names[1:]
+    for name in downstream:
+        source = (notebook_root / name).read_text(encoding="utf-8")
+        assert "restore_archive" in source
+        assert "EXPECTED_INPUT_SHA256" in source
+    adversarial = (notebook_root / names[-1]).read_text(encoding="utf-8")
+    assert "RUN_ADVERSARIAL_PILOT = False" in adversarial
+    assert "ADVERSARIAL_HUMAN_APPROVAL = False" in adversarial
+
+
+def test_canonical_notebooks_match_their_generator() -> None:
+    result = subprocess.run(
+        [sys.executable, "tools/generate_canonical_notebooks.py", "--check"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
     )
-    assert "pip', 'install', '--no-build-isolation', '--no-deps'" in quickstart_source
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_core_install_has_no_forced_dependencies() -> None:

@@ -6,7 +6,12 @@ from commguard.environment import preflight
 from commguard.environment.preflight import check_environment
 from commguard.evaluation import evaluate_detector
 from commguard.features import extract_feature_result, extract_features, require_primary_coverage
-from commguard.orchestrator import run_experiment, run_matrix, run_segmented_series
+from commguard.orchestrator import (
+    run_adversarial_matrix,
+    run_experiment,
+    run_matrix,
+    run_segmented_series,
+)
 from commguard.provenance import ProvenanceContext
 from commguard.reporting import generate_report
 from commguard.schemas import load_artifact
@@ -27,6 +32,7 @@ __all__ = [
     "preflight",
     "ProvenanceContext",
     "require_primary_coverage",
+    "run_adversarial_matrix",
     "run_experiment",
     "run_matrix",
     "run_segmented_series",

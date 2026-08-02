@@ -127,6 +127,105 @@ def test_adversarial_run_requires_approval_before_artifact_or_preflight(
     assert not list(tmp_path.iterdir())
 
 
+def _holdout_plan() -> AdversarialHoldoutPlan:
+    return AdversarialHoldoutPlan(
+        development_families=(
+            "gradient_accumulation",
+            "periodic_local_sgd",
+            "segmented_runs",
+            "idle_padding",
+        ),
+        hardening_families=(
+            "randomized_synchronization",
+            "mixed_training_inference",
+            "synthetic_communication_decoy",
+        ),
+        final_family="diloco_inspired",
+        final_session_ids=("session-reserved-final",),
+        final_config_ids=("diloco-inspired-inner10-v1",),
+    )
+
+
+def test_adversarial_matrix_requires_both_approval_gates_before_writes(tmp_path) -> None:
+    with pytest.raises(ApprovalRequiredError, match="explicit approval"):
+        orchestrator.run_adversarial_matrix(
+            output=tmp_path,
+            holdout_plan=_holdout_plan(),
+        )
+    assert not list(tmp_path.iterdir())
+
+    with pytest.raises(ApprovalRequiredError, match="separate explicit approval"):
+        orchestrator.run_adversarial_matrix(
+            output=tmp_path,
+            holdout_plan=_holdout_plan(),
+            adversarial_approval=True,
+            release_final_adversarial_holdout=True,
+        )
+    assert not list(tmp_path.iterdir())
+
+
+def test_adversarial_matrix_plans_before_execution_and_keeps_final_sealed(
+    tmp_path, monkeypatch
+) -> None:
+    store = ArtifactStore(tmp_path)
+    store.initialize()
+    store.write_json(
+        "results/evaluation-accepted.json",
+        {
+            "artifact_kind": "evaluation_result",
+            "schema_version": LEGACY_SCHEMA_VERSION,
+            "coverage_gate": {"passed": True},
+            "primary_communication_only": {"metrics": {}},
+        },
+        validate=False,
+    )
+    calls = []
+
+    def experiment(workload, *args, **kwargs):
+        plan_paths = list((tmp_path / "corpora").glob("*-plan.json"))
+        assert len(plan_paths) == 1
+        plan = CorpusManifest.from_dict(json.loads(plan_paths[0].read_text()))
+        assert len(plan.planned_runs) == 11
+        assert not plan.accepted_run_ids
+        calls.append((workload, kwargs))
+        return {
+            "run_id": f"run-adversarial-{len(calls)}",
+            "manifest": {"exit_status": "completed"},
+        }
+
+    gaps = []
+    monkeypatch.setattr(orchestrator, "run_experiment", experiment)
+    monkeypatch.setattr(orchestrator.time, "sleep", gaps.append)
+
+    summary = orchestrator.run_adversarial_matrix(
+        output=tmp_path,
+        holdout_plan=_holdout_plan(),
+        adversarial_approval=True,
+    )
+
+    assert summary["planned"] == 11
+    assert summary["executed"] == 10
+    assert summary["completed"] == 10
+    assert summary["failed"] == 0
+    assert summary["sealed"] == 1
+    assert summary["detector_metrics_computed"] is False
+    assert len(calls) == 10
+    assert all(call[1]["adversarial_approval"] is True for call in calls)
+    assert len({call[1]["provenance"].experiment_session_id for call in calls}) == 1
+    assert gaps == [1.0, 1.0, 1.0]
+    assert summary["family_counts"]["diloco_inspired"]["sealed"] == 1
+    assert summary["family_counts"]["diloco_inspired"]["failed"] == 0
+    saved = json.loads((tmp_path / summary["summary_artifact"]).read_text())
+    assert saved["summary_artifact"] == summary["summary_artifact"]
+    assert saved["executed"] == summary["executed"]
+    assert saved["holdout_plan"]["final_family"] == "diloco_inspired"
+    final = CorpusManifest.from_dict(
+        json.loads((tmp_path / summary["final_corpus_manifest"]).read_text())
+    )
+    assert len(final.accepted_run_ids) == 10
+    assert all(plan.designation == "adversarial" for plan in final.planned_runs)
+
+
 def test_segmented_series_plans_real_process_segments_before_launch(tmp_path, monkeypatch) -> None:
     store = ArtifactStore(tmp_path)
     store.initialize()

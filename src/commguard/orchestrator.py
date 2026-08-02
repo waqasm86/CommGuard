@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from commguard.adversarial import strategy_for_config
+from commguard.adversarial import AdversarialHoldoutPlan, strategy_for_config
 from commguard.artifacts import ArtifactStore
 from commguard.calibration import analyze_calibration
 from commguard.corpus import CorpusManifest, PlannedRun
@@ -34,7 +34,7 @@ from commguard.features import (
 from commguard.provenance import ProvenanceContext, new_corpus_id, new_run_id
 from commguard.schemas import CURRENT_SCHEMA_VERSION, SCHEMA_VERSION, TELEMETRY_FIELDS, RunManifest
 from commguard.telemetry import TelemetryCollector
-from commguard.workloads import get_workload, profile_workloads
+from commguard.workloads import adversarial_profile_workloads, get_workload, profile_workloads
 
 
 def _nccl_environment() -> dict[str, str]:
@@ -523,6 +523,194 @@ def run_segmented_series(
     return summary
 
 
+def run_adversarial_matrix(
+    output: str | Path = "artifacts",
+    *,
+    holdout_plan: AdversarialHoldoutPlan,
+    adversarial_approval: bool = False,
+    release_final_adversarial_holdout: bool = False,
+    final_holdout_approval: bool = False,
+    repetitions: int = 1,
+    timeout_s: float = 180.0,
+    provenance: ProvenanceContext | None = None,
+) -> dict[str, Any]:
+    """Collect a bounded adversarial corpus only after benign acceptance and approval."""
+    if not adversarial_approval:
+        raise ApprovalRequiredError(
+            "the bounded adversarial matrix requires explicit approval before artifact creation"
+        )
+    if release_final_adversarial_holdout and not final_holdout_approval:
+        raise ApprovalRequiredError(
+            "releasing the sealed final adversarial holdout requires separate explicit approval"
+        )
+    if repetitions < 1:
+        raise ValueError("adversarial repetitions must be at least one")
+    holdout_plan.validate()
+    root = Path(output)
+    evaluation_paths = sorted((root / "results").glob("evaluation-*.json"))
+    if not evaluation_paths:
+        raise CoverageError("adversarial collection requires a saved benign acceptance evaluation")
+    benign_acceptance = json.loads(evaluation_paths[-1].read_text(encoding="utf-8"))
+    if not benign_acceptance.get("coverage_gate", {}).get("passed"):
+        raise CoverageError("saved benign evaluation does not contain a passing coverage gate")
+    if not benign_acceptance.get("primary_communication_only"):
+        raise CoverageError("saved benign evaluation has no primary communication-only result")
+
+    context = provenance or ProvenanceContext.create(corpus_id=new_corpus_id("adversarial-matrix"))
+    segment_group_id = f"segments-{context.experiment_session_id}"
+    plans: list[PlannedRun] = []
+    for workload in adversarial_profile_workloads():
+        config = get_workload(workload)
+        round_name = holdout_plan.round_for(
+            family=str(config["family"]),
+            session_id=context.experiment_session_id,
+            config_id=str(config["config_id"]),
+            release_final=release_final_adversarial_holdout,
+        )
+        slot_count = (
+            int(config["segment_count"])
+            if config["strategy_id"] == "segmented_runs" and round_name != "sealed_final_holdout"
+            else 1
+        )
+        for repetition in range(repetitions):
+            for slot in range(slot_count):
+                planned_config = {
+                    **config,
+                    "workload_name": workload,
+                    "adversarial_round": round_name,
+                    "repetition": repetition,
+                }
+                if config["strategy_id"] == "segmented_runs":
+                    planned_config.update(
+                        {
+                            "segment_index": slot,
+                            "segment_group_id": segment_group_id,
+                        }
+                    )
+                plans.append(
+                    PlannedRun(
+                        plan_id=(
+                            f"adversarial-{config['strategy_id']}-r{repetition:03d}-s{slot:03d}"
+                        ),
+                        workload_family=str(config["family"]),
+                        target_label=str(config["label"]),
+                        config=planned_config,
+                        designation="adversarial",
+                        random_seed=int(config.get("seed", 1337)),
+                        workload_config_id=str(config["config_id"]),
+                    )
+                )
+    store = ArtifactStore(output)
+    store.initialize()
+    plan_manifest = _corpus_manifest(context, tuple(plans))
+    plan_path = store.write_json(
+        f"corpora/{context.corpus_id}-plan.json",
+        plan_manifest.to_dict(),
+    )
+    outcomes: list[dict[str, Any]] = []
+    finalized: list[PlannedRun] = []
+    for index, plan in enumerate(plans):
+        if plan.config["adversarial_round"] == "sealed_final_holdout":
+            finalized.append(plan)
+            continue
+        workload = str(plan.config["workload_name"])
+        overrides = {
+            "repetition": int(plan.config["repetition"]),
+            "adversarial_round": str(plan.config["adversarial_round"]),
+        }
+        if plan.config["strategy_id"] == "segmented_runs":
+            overrides.update(
+                {
+                    "segment_index": int(plan.config["segment_index"]),
+                    "segment_group_id": str(plan.config["segment_group_id"]),
+                    "min_measured_seconds": float(plan.config["segment_seconds"]),
+                }
+            )
+        outcome = run_experiment(
+            workload,
+            output=output,
+            overrides=overrides,
+            timeout_s=timeout_s,
+            strict_preflight=True,
+            raise_on_failure=False,
+            provenance=context,
+            adversarial_approval=True,
+        )
+        outcomes.append(outcome)
+        accepted = (
+            str(outcome["run_id"]) if outcome["manifest"]["exit_status"] == "completed" else None
+        )
+        finalized.append(replace(plan, accepted_run_id=accepted))
+        if plan.config["strategy_id"] == "segmented_runs" and index + 1 < len(plans):
+            next_plan = plans[index + 1]
+            if (
+                next_plan.config["strategy_id"] == "segmented_runs"
+                and next_plan.config["repetition"] == plan.config["repetition"]
+            ):
+                time.sleep(float(plan.config["restart_gap_seconds"]))
+    final_manifest = _corpus_manifest(context, tuple(finalized))
+    final_path = store.write_json(
+        f"corpora/{context.corpus_id}-final.json",
+        final_manifest.to_dict(),
+    )
+    prior_extractions = set((store.root / "features").glob("extraction-*.json"))
+    extraction = extract_feature_result(
+        output,
+        final_manifest,
+        output=output,
+        selected_designation="adversarial",
+    )
+    new_extractions = set((store.root / "features").glob("extraction-*.json")) - prior_extractions
+    if len(new_extractions) != 1:
+        raise RuntimeError("adversarial matrix did not create exactly one extraction summary")
+    extraction_path = new_extractions.pop()
+    family_summary = _family_summary(tuple(finalized), extraction.coverage)
+    for family, counts in family_summary.items():
+        sealed = sum(
+            plan.workload_family == family
+            and plan.config["adversarial_round"] == "sealed_final_holdout"
+            for plan in finalized
+        )
+        counts["sealed"] = sealed
+        counts["failed"] -= sealed
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    summary_relative = f"results/adversarial-matrix-{timestamp}.json"
+    summary = {
+        "artifact_kind": "experiment_summary",
+        "schema_version": SCHEMA_VERSION,
+        "summary_type": "adversarial_matrix",
+        "experiment_session_id": context.experiment_session_id,
+        "collection_id": context.collection_id,
+        "corpus_id": context.corpus_id,
+        "source_commit": context.source_commit,
+        "source_dirty": context.source_dirty,
+        "input_archive_sha256": context.input_archive_sha256,
+        "holdout_plan": holdout_plan.to_dict(),
+        "final_holdout_released": release_final_adversarial_holdout,
+        "planned_corpus_manifest": str(plan_path.relative_to(store.root)),
+        "final_corpus_manifest": str(final_path.relative_to(store.root)),
+        "feature_extraction_summary": str(extraction_path.relative_to(store.root)),
+        "planned": len(plans),
+        "executed": len(outcomes),
+        "sealed": sum(
+            plan.config["adversarial_round"] == "sealed_final_holdout" for plan in finalized
+        ),
+        "completed": sum(plan.accepted_run_id is not None for plan in finalized),
+        "failed": sum(
+            plan.accepted_run_id is None
+            and plan.config["adversarial_round"] != "sealed_final_holdout"
+            for plan in finalized
+        ),
+        "run_ids": [outcome["run_id"] for outcome in outcomes],
+        "family_counts": family_summary,
+        "feature_extraction": extraction.summary(),
+        "detector_metrics_computed": False,
+        "summary_artifact": summary_relative,
+    }
+    store.write_json(summary_relative, summary)
+    return summary
+
+
 def estimate_matrix(profile: str, repetitions: int = 1) -> dict[str, Any]:
     plans = plan_matrix(profile, repetitions)
     seconds = sum(float(plan.config.get("estimated_seconds", 60)) for plan in plans)
@@ -621,12 +809,13 @@ def run_matrix(
     repetitions: int | None = None,
     negative_calibration_mode: bool = False,
     timeout_s: float = 180.0,
+    provenance: ProvenanceContext | None = None,
 ) -> dict[str, Any]:
     """Run a planned benign profile after a session-specific calibration gate."""
     if repetitions is None:
         repetitions = 1 if profile == "smoke" else 3
     estimate = estimate_matrix(profile, repetitions)
-    context = ProvenanceContext.create(corpus_id=new_corpus_id(f"{profile}-matrix"))
+    context = provenance or ProvenanceContext.create(corpus_id=new_corpus_id(f"{profile}-matrix"))
     plans = plan_matrix(profile, repetitions)
     store = ArtifactStore(output)
     store.initialize()

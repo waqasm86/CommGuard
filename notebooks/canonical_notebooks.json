@@ -1,11 +1,10 @@
 {
   "schema_version": 1,
   "canonical_notebooks": [
-    "commguard_calibration_v2.ipynb",
-    "commguard_benign_corpus.ipynb",
-    "commguard_detector_evaluation.ipynb",
-    "commguard_dual_t4.ipynb",
-    "commguard_dual_t4_research.ipynb"
+    "commguard_calibration_v3.ipynb",
+    "commguard_benign_corpus_v2.ipynb",
+    "commguard_detector_evaluation_v2.ipynb",
+    "commguard_adversarial_redteam_v1.ipynb"
   ],
   "executed_name_pattern": "commguard-*.ipynb",
   "policy_document": "../docs/notebook-policy.md"

@@ -15,6 +15,21 @@ personal storage links, or claims based on anticipated results. A result
 section says `not executed` until a separately preserved executed artifact
 exists.
 
+The current canonical sequence is generated deterministically by
+`tools/generate_canonical_notebooks.py` and checked with `--check`:
+
+1. `commguard_calibration_v3.ipynb`
+2. `commguard_benign_corpus_v2.ipynb`
+3. `commguard_detector_evaluation_v2.ipynb`
+4. `commguard_adversarial_redteam_v1.ipynb`
+
+Each source refuses a mutable branch install. The operator must provide a
+40-character reviewed commit that is present on the configured remote; the
+notebook fetches that object, uses detached HEAD, and fails if the checkout is
+dirty or not visible from a remote ref. Each downstream notebook also requires
+the exact SHA-256 printed by its predecessor and restores the archive through
+the SDK's create-only, traversal/link-rejecting loader.
+
 ## Executed evidence
 
 Executed notebooks are evidence/release artifacts, not editable source. They
@@ -42,12 +57,9 @@ state inventory and the evidence index.
 personal naming in a canonical path. The deleted name remains visible in Git
 history and its hash is recorded in the baseline inventory.
 
-The research-completion series will supersede the current staged notebooks
-with versioned canonical sources:
-
-1. `commguard_calibration_v3.ipynb`
-2. `commguard_benign_corpus_v2.ipynb`
-3. `commguard_detector_evaluation_v2.ipynb`
-4. `commguard_adversarial_redteam_v1.ipynb`
+The research-completion series supersedes the earlier staged sources with the
+versioned canonical sequence above. The older underscore-named notebooks stay
+in Git as historical source files but are no longer in the canonical inventory.
+They are not result evidence and are not inputs to the current sequence.
 
 Superseding a canonical source never deletes executed evidence.
