@@ -80,6 +80,7 @@ def _parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--input", type=Path, default=Path("artifacts"))
     evaluate.add_argument("--output", type=Path, default=Path("artifacts"))
     evaluate.add_argument("--negative-calibration-mode", action="store_true")
+    evaluate.add_argument("--minimum-runs-per-family", type=int, default=3)
 
     report = subparsers.add_parser("report", help="generate an evidence-grounded report")
     report.add_argument("--input", type=Path, default=Path("artifacts"))
@@ -149,6 +150,7 @@ def main(argv: list[str] | None = None) -> int:
                     input_root=args.input,
                     output=args.output,
                     negative_calibration_mode=args.negative_calibration_mode,
+                    minimum_runs_per_family=args.minimum_runs_per_family,
                 )
             )
         elif args.command == "report":

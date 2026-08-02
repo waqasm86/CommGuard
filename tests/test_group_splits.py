@@ -9,8 +9,12 @@ def test_every_window_from_each_run_stays_in_one_split() -> None:
     rows = [
         {
             "run_id": f"run-{run_id}",
-            "session_fingerprint": "session-1",
+            "experiment_session_id": "session-1",
+            "session_fingerprint": f"environment-{run_id}",
+            "legacy_grouping_ambiguous": False,
             "target_label": "training" if run_id % 2 else "inference",
+            "workload_family": "ddp_training" if run_id % 2 else "control_idle",
+            "workload_config_id": f"config-{run_id % 4}",
             "window_seconds": 5,
             "window_index": window_index,
         }

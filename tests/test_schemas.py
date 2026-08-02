@@ -6,6 +6,7 @@ import pytest
 
 from commguard.exceptions import ValidationError
 from commguard.schemas import (
+    CURRENT_SCHEMA_VERSION,
     FIELD_UNITS,
     TELEMETRY_FIELDS,
     FieldReading,
@@ -64,3 +65,23 @@ def test_split_assignment_contract_is_actionable() -> None:
                 "split": "both",
             }
         )
+
+
+def test_primary_evaluation_schema_requires_non_diagnostic_split() -> None:
+    payload = {
+        "artifact_kind": "evaluation_result",
+        "schema_version": CURRENT_SCHEMA_VERSION,
+        "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "split_assignments": {"run-1": "test"},
+        "leakage_audit": {"passed": True},
+        "ablations": {},
+        "primary_communication_only": {"window_seconds": 30.0},
+        "actual_split_strategy": "deterministic_class_stratified_whole_run",
+        "split_plan": {"diagnostic_only": False},
+        "warnings": [],
+    }
+    validate_artifact(payload)
+
+    payload["split_plan"]["diagnostic_only"] = True
+    with pytest.raises(ValidationError, match="diagnostic split"):
+        validate_artifact(payload)

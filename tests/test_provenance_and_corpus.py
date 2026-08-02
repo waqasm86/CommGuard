@@ -118,6 +118,15 @@ def test_corpus_allow_list_prevents_calibration_idle_leakage() -> None:
     assert manifest.allows("run-calibration-idle", "calibration")
 
 
+def test_workload_configuration_identity_is_stable_across_repetitions() -> None:
+    first = PlannedRun("repeat-0", "ddp_training", "training", {"batch_size": 4})
+    second = PlannedRun("repeat-1", "ddp_training", "training", {"batch_size": 4})
+    changed = PlannedRun("repeat-2", "ddp_training", "training", {"batch_size": 8})
+
+    assert first.resolved_config_id() == second.resolved_config_id()
+    assert first.resolved_config_id() != changed.resolved_config_id()
+
+
 def test_legacy_manifest_loads_with_explicit_ambiguous_grouping(tmp_path) -> None:
     source = tmp_path / "manifest.json"
     source.write_text(__import__("json").dumps(legacy_manifest().to_dict()), encoding="utf-8")

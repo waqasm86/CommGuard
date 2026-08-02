@@ -376,9 +376,20 @@ def validate_artifact(data: Mapping[str, Any]) -> None:
                     "corpus_id",
                     "node_id",
                     "environment_fingerprint",
+                    "workload_config_id",
                     "aligned_sample_pairs",
                 ),
             )
+            for name in (
+                "plan_id",
+                "experiment_session_id",
+                "collection_id",
+                "corpus_id",
+                "node_id",
+                "environment_fingerprint",
+                "workload_config_id",
+            ):
+                _require(bool(data[name]), name, "must be non-empty")
             _require(int(data["aligned_sample_pairs"]) >= 2, "aligned_sample_pairs", "too few")
     elif kind == "split_assignment":
         _require_fields(data, "split_assignment", ("run_id", "split"))
@@ -395,6 +406,27 @@ def validate_artifact(data: Mapping[str, Any]) -> None:
         )
         _utc_timestamp(str(data["created_at_utc"]), "created_at_utc")
         _require(isinstance(data["ablations"], dict), "ablations", "must be an object")
+        if data.get("schema_version") == CURRENT_SCHEMA_VERSION:
+            _require_fields(
+                data,
+                "evaluation_result",
+                (
+                    "primary_communication_only",
+                    "actual_split_strategy",
+                    "split_plan",
+                    "warnings",
+                ),
+            )
+            _require(
+                data["primary_communication_only"].get("window_seconds") == 30.0,
+                "primary_communication_only.window_seconds",
+                "must be 30 seconds",
+            )
+            _require(
+                data["split_plan"].get("diagnostic_only") is False,
+                "split_plan.diagnostic_only",
+                "primary evaluation cannot use a diagnostic split",
+            )
     elif kind == "calibration_result":
         _require_fields(
             data,

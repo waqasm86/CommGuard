@@ -59,6 +59,27 @@ legacy grouping when migrated in memory. Direct low-level feature extraction
 without corpus provenance returns version 1-compatible diagnostic rows; new
 persisted research extraction uses version 2 rows with true grouping IDs.
 
+Version 2 feature rows also carry a stable `workload_config_id`. An explicit
+planned ID is used when supplied; otherwise the ID is deterministically derived
+from the family and canonical serialized configuration, so repetitions share a
+configuration identity without sharing a run identity.
+
+## Split and evaluation artifacts
+
+A split plan records the requested mode, actual strategy, deterministic seed,
+diagnostic flag, exact run and session groups, and per-split class/family/config
+run counts. Primary plans require non-empty train/validation/test partitions,
+both target classes, and every required family in each partition. Family and
+configuration holdouts are explicitly diagnostic.
+
+Version 2 evaluation results contain a 30-second
+`primary_communication_only` block, the complete split plan and assignments,
+train/validation/test sample counts, train-only preprocessing disclosure,
+validation-only model/threshold selection metadata, run/window/per-family
+metrics, hard-negative false-positive rates, abstention coverage/selective
+risk, and warnings. Confidence intervals are null when independent test groups
+are insufficient. Non-communication and combined ablations are diagnostics.
+
 ## Other records
 
 Workload events retain rank-local progress and checksums. Feature rows retain

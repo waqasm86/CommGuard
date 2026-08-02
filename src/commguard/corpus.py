@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
@@ -27,6 +29,7 @@ class PlannedRun:
     designation: str = "benign"
     accepted_run_id: str | None = None
     random_seed: int = 1337
+    workload_config_id: str | None = None
 
     def validate(self) -> None:
         _require(bool(self.plan_id), "planned_run.plan_id: required")
@@ -38,6 +41,24 @@ class PlannedRun:
         )
         _require(isinstance(self.config, Mapping), "planned_run.config: must be an object")
         _require(self.random_seed >= 0, "planned_run.random_seed: must be non-negative")
+        _require(
+            self.workload_config_id is None or bool(self.workload_config_id),
+            "planned_run.workload_config_id: must be non-empty when provided",
+        )
+
+    def resolved_config_id(self) -> str:
+        if self.workload_config_id is not None:
+            return self.workload_config_id
+        encoded = json.dumps(
+            {
+                "workload_family": self.workload_family,
+                "config": self.config,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+        return f"config-{hashlib.sha256(encoded).hexdigest()[:16]}"
 
 
 @dataclass(frozen=True)

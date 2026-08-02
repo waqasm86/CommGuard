@@ -40,6 +40,7 @@ METADATA_COLUMNS = {
     "legacy_grouping_ambiguous",
     "target_label",
     "workload_family",
+    "workload_config_id",
     "designation",
     "window_seconds",
     "window_index",
@@ -273,6 +274,9 @@ def _feature_window(
         "target_label": plan.target_label if plan is not None else manifest["workload_label"],
         "workload_family": (
             plan.workload_family if plan is not None else manifest["workload_family"]
+        ),
+        "workload_config_id": (
+            plan.resolved_config_id() if plan is not None else manifest.get("workload_config_id")
         ),
         "designation": plan.designation if plan is not None else manifest["designation"],
         "window_seconds": window_seconds,

@@ -113,7 +113,9 @@ Acceptance: all available CPU, lint, format, build, import, CLI, notebook, secre
 - [x] `2026-08-02T13:53:00+05:00` Phase 03 started from clean commit `0e8b505`; implement coverage records/results, corpus-only selection, timestamp alignment, strict gates, and duration-controlled execution before running acceptance checks.
 - [x] `2026-08-02T14:11:37+05:00` Phase 03 completed: declared-corpus extraction now emits linked v2 feature, coverage, and summary artifacts with one diagnostic per plan; cross-GPU values use deterministic tolerance-based timestamp pairs; actual rank measurement intersections bound new feature windows; and the 30-second primary gate cannot be silently replaced by diagnostic short windows.
 - [x] `2026-08-02T14:11:37+05:00` Phase 03 acceptance: 79 CPU-safe tests passed/5 deselected; Ruff check/format, temporary-output wheel/sdist build, import, CLI help, and `git diff --check` passed. Regressions cover exact 4.4-second post-warmup exclusion, calibration-idle leakage, sampling gaps, missing plans, timestamp skew, incomplete evaluation refusal, primary/diagnostic separation, duration cap failure, and measured-interval schema/participation validation.
-- [ ] Execute Phase 04 and its acceptance checks.
+- [x] `2026-08-02T14:13:00+05:00` Phase 04 started from clean commit `3163275`; replace environment-fingerprint grouping, validate the split hierarchy, and separate train/validation selection from final test reporting.
+- [x] `2026-08-02T14:25:52+05:00` Phase 04 completed CPU-safe implementation: true-session-aware split plans persist actual strategies and exact groups; deterministic fallback preserves whole runs, classes, and required families; family/config holdouts are explicit diagnostics; primary reporting is 30-second communication-only; and model/threshold selection accepts validation data only.
+- [x] `2026-08-02T14:25:52+05:00` Phase 04 acceptance: 89 CPU-safe tests passed, one optional analysis integration test skipped, and five hardware tests were deselected; Ruff check/format passed. The project virtualenv lacks the declared `analysis` extra (`pandas`, NumPy, scikit-learn), so no dependency was installed and no detector metrics were fabricated; dependency-free tests cover the split hierarchy, one-class refusal, legacy ambiguity, old per-run environment-fingerprint regression, family/config modes, selection isolation, schema, and small-group interval suppression.
 - [ ] Execute Phase 05 and its acceptance checks.
 - [ ] Execute Phase 06 and its acceptance checks.
 - [ ] Execute Phase 07 and its acceptance checks.
@@ -133,6 +135,7 @@ Acceptance: all available CPU, lint, format, build, import, CLI, notebook, secre
 - `2026-08-02`: Treat a corpus as a deliberate matrix that may span sessions. Each session-specific collection manifest has a unique `collection_id` and true `experiment_session_id`, while deliberately repeated collections may share the same `corpus_id`.
 - `2026-08-02`: Keep `session_fingerprint` only as a compatibility alias in new environment reports. It equals `environment_fingerprint`, is explicitly non-semantic for grouping, and live telemetry values are excluded from its stable-capability hash.
 - `2026-08-02`: Define 30 seconds as the immutable primary feature window and 5/15 seconds as diagnostics. Benign workload defaults collect 35 measured seconds after warmup so asynchronous sampler edges do not make a nominal 30-second run incapable of producing a 30-second common window.
+- `2026-08-02`: Require at least three primary runs per required family for detector evaluation, because a valid train/validation/test plan cannot represent a family with fewer. Derive stable configuration IDs from family plus canonical configuration when the plan does not provide one explicitly.
 
 ## Discoveries
 
@@ -146,6 +149,7 @@ Acceptance: all available CPU, lint, format, build, import, CLI, notebook, secre
 - Calibration-stage idle runs entered the 16-row feature artifact. Primary corpus selection must come from a declared corpus manifest, not designation alone.
 - At the Phase 02 resumption boundary, schema validation accepts v2 but the orchestrator still constructs a v2 `RunManifest` without required session/corpus/node/dirty/seed fields. Existing tests do not exercise that path because GPU orchestration is hardware-marked.
 - Iteration-only completion was not sufficient evidence of usable telemetry duration. Rank-local measurement events and their common monotonic intersection are now required for completed, participation-valid v2 manifests; physical GPU execution remains pending compatible hardware.
+- The Phase 04 host has the development tools but not the optional analysis stack. Split and selection-policy behavior is fully CPU/dependency-free tested; fitting pandas/scikit-learn models remains unexecuted locally and must not be reported as a measured detector result.
 
 ## Schema migrations
 
@@ -205,7 +209,14 @@ their respective phases. Ruff format no longer has a pending Phase 02 failure.
 
 Phase 03 validation update: coverage, timestamp alignment, duration control,
 measurement provenance, and strict pre-evaluation coverage gates pass locally.
-Grouped split/evaluation semantics beyond the coverage gate remain Phase 04.
+Grouped split/evaluation semantics beyond the coverage gate were deferred to
+Phase 04 at this checkpoint.
+
+Phase 04 validation update: true-session/class/family/config split planning,
+legacy grouping refusal, selection isolation, primary-report schema, and
+small-independent-group warnings pass locally. The optional pandas/scikit-learn
+integration test is skipped because the `analysis` extra is not installed; no
+local model metrics are claimed.
 
 ## Recovery and idempotence
 
