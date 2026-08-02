@@ -20,6 +20,7 @@ from commguard.calibration import (
     STANDARD_CALIBRATION_REPETITIONS,
     analyze_calibration,
     build_calibration_reference,
+    validate_standard_calibration_result,
     verify_calibration_reference,
 )
 from commguard.corpus import CorpusManifest, PlannedRun
@@ -27,6 +28,7 @@ from commguard.distributed.launcher import LaunchResult, launch_torchrun
 from commguard.environment.preflight import check_environment
 from commguard.exceptions import (
     ApprovalRequiredError,
+    ArtifactExistsError,
     CalibrationError,
     CoverageError,
     WorkloadError,
@@ -40,7 +42,12 @@ from commguard.features import (
 from commguard.provenance import ProvenanceContext, new_corpus_id, new_run_id
 from commguard.schemas import CURRENT_SCHEMA_VERSION, SCHEMA_VERSION, TELEMETRY_FIELDS, RunManifest
 from commguard.telemetry import TelemetryCollector
-from commguard.workloads import adversarial_profile_workloads, get_workload, profile_workloads
+from commguard.workloads import (
+    adversarial_profile_workloads,
+    calibration_workload_name,
+    get_workload,
+    profile_workloads,
+)
 
 
 def _nccl_environment() -> dict[str, str]:
@@ -285,6 +292,16 @@ def run_experiment(
         if changed_identity:
             raise ValueError(f"workload identity fields cannot be overridden: {changed_identity}")
         config.update(overrides)
+    if config["mode"] == "calibration":
+        expected_workload = calibration_workload_name(
+            str(config.get("collective", "all_reduce")),
+            int(config.get("payload_mib", 0)),
+        )
+        if workload != expected_workload:
+            raise ValueError(
+                "calibration workload identity conflicts with its configured payload: "
+                f"workload={workload!r} expected={expected_workload!r}"
+            )
     if config["designation"] == "adversarial" and not adversarial_approval:
         raise ApprovalRequiredError(
             f"workload={workload} family={config['family']} is a bounded defensive red-team "
@@ -366,12 +383,61 @@ def run_calibration_sweep(
         raise ValueError("calibration payloads must be positive")
     if len(payload_mib) != len(set(payload_mib)):
         raise ValueError("calibration payloads must be unique")
+    supplied_provenance = provenance is not None
     context = provenance or ProvenanceContext.create(corpus_id=new_corpus_id("calibration"))
+    store = ArtifactStore(output)
+    store.initialize()
+    sweep_id = f"{context.experiment_session_id}-{context.collection_id}"
+    marker_prefix = Path("results/calibration-sweeps") / sweep_id
+    started_marker = store.resolve(marker_prefix / "started.json")
+    current_markers = [started_marker] if started_marker.exists() else []
+    existing_markers = sorted(store.resolve("results/calibration-sweeps").glob("*/started.json"))
+    if current_markers or (existing_markers and not supplied_provenance):
+        marker = current_markers[0] if current_markers else existing_markers[0]
+        completed = marker.with_name("completed.json").is_file()
+        state = "completed" if completed else "partial or in-progress"
+        raise ArtifactExistsError(
+            f"refusing to repeat a {state} calibration sweep in {store.root}; "
+            "use a new notebook run ID and artifact directory"
+        )
+    expected_matrix = [
+        {"observation_type": "idle_baseline", "repetition": repetition, "payload_mib": 0}
+        for repetition in range(repetitions)
+    ] + [
+        {
+            "observation_type": "collective",
+            "repetition": repetition,
+            "payload_mib": payload,
+            "collective": collective,
+            "workload_name": calibration_workload_name(collective, payload),
+        }
+        for repetition in range(repetitions)
+        for payload in payload_mib
+    ]
+    store.write_json(
+        marker_prefix / "started.json",
+        {
+            "artifact_kind": "experiment_summary",
+            "schema_version": SCHEMA_VERSION,
+            "summary_type": "calibration_sweep_started",
+            "sweep_id": sweep_id,
+            "experiment_session_id": context.experiment_session_id,
+            "collection_id": context.collection_id,
+            "notebook_version": context.notebook_version,
+            "source_commit": context.source_commit,
+            "planned_run_count": len(expected_matrix),
+            "expected_matrix": expected_matrix,
+            "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        },
+    )
     observations: list[dict[str, Any]] = []
 
     def observe(outcome: dict[str, Any], **identity: Any) -> dict[str, Any]:
         return {
             "run_id": outcome["run_id"],
+            "workload_name": outcome["manifest"]["workload_name"],
+            "worker_mode": outcome["manifest"]["config"]["mode"],
+            "run_directory": f"runs/{outcome['run_id']}",
             **identity,
             "participation_valid": outcome["manifest"]["participation_valid"],
             "exit_status": outcome["manifest"]["exit_status"],
@@ -402,8 +468,9 @@ def run_calibration_sweep(
             )
         )
         for payload in payload_mib:
+            workload_name = calibration_workload_name(collective, payload)
             outcome = run_experiment(
-                "collective_all_reduce_1mib",
+                workload_name,
                 output=output,
                 overrides={
                     "payload_mib": payload,
@@ -433,6 +500,7 @@ def run_calibration_sweep(
     environment = check_environment(strict=True, provenance=context)
     result.update(
         {
+            "sweep_id": sweep_id,
             "experiment_session_id": context.experiment_session_id,
             "collection_id": context.collection_id,
             "corpus_id": context.corpus_id,
@@ -443,7 +511,6 @@ def run_calibration_sweep(
             "source_dirty": context.source_dirty,
         }
     )
-    store = ArtifactStore(output)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     path = store.write_json(f"results/calibration-{timestamp}.json", result)
     result["path"] = str(path)
@@ -451,6 +518,24 @@ def run_calibration_sweep(
         store.root,
         path,
         current_experiment_session_id=context.experiment_session_id,
+    )
+    validation = validate_standard_calibration_result(store.root, result)
+    result["standard_sweep_validation"] = validation
+    store.write_json(
+        marker_prefix / "completed.json",
+        {
+            "artifact_kind": "experiment_summary",
+            "schema_version": SCHEMA_VERSION,
+            "summary_type": "calibration_sweep_completed",
+            "sweep_id": sweep_id,
+            "experiment_session_id": context.experiment_session_id,
+            "collection_id": context.collection_id,
+            "result_artifact": result["reference"]["calibration_artifact_path"],
+            "result_sha256": result["reference"]["calibration_sha256"],
+            "calibration_status": result["status"],
+            "clean_standard_calibration": validation["clean_standard_calibration"],
+            "completed_at_utc": datetime.now(timezone.utc).isoformat(),
+        },
     )
     return result
 

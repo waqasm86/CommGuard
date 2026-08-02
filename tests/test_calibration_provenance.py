@@ -11,11 +11,13 @@ from commguard.artifacts import ArtifactStore
 from commguard.calibration import (
     analyze_calibration,
     build_calibration_reference,
+    validate_standard_calibration_result,
     verify_calibration_reference,
 )
-from commguard.exceptions import CalibrationError
+from commguard.exceptions import ArtifactExistsError, CalibrationError
 from commguard.provenance import ProvenanceContext
 from commguard.schemas import CURRENT_SCHEMA_VERSION, LEGACY_SCHEMA_VERSION, validate_artifact
+from commguard.workloads import calibration_workload_name, get_workload
 
 
 def modern_calibration(
@@ -207,9 +209,43 @@ def test_standard_sweep_collects_idle_and_four_repeated_payloads(tmp_path, monke
         calls.append((workload, overrides))
         payload = int(overrides.get("payload_mib", 0))
         signal = 100_000.0 if workload == "calibration_idle" else payload * 2_000_000.0
+        run_id = f"run-{len(calls):02d}"
+        config = get_workload(workload)
+        config.update(overrides)
+        config.update({"mode": config["mode"], "workload_name": workload})
+        run_directory = tmp_path / "runs" / run_id
+        run_directory.mkdir(parents=True)
+        (run_directory / "manifest.json").write_text(
+            json.dumps({"workload_name": workload, "config": config}),
+            encoding="utf-8",
+        )
+        if workload == "calibration_idle":
+            for rank in (0, 1):
+                events = [
+                    {"event": "measurement_start", "monotonic_ns": 100, "details": {}},
+                    {"event": "heartbeat", "monotonic_ns": 150, "details": {}},
+                    {
+                        "event": "measurement_interval",
+                        "monotonic_ns": 200,
+                        "details": {
+                            "measurement_start_monotonic_ns": 100,
+                            "measurement_end_monotonic_ns": 200,
+                        },
+                    },
+                    {"event": "measurement_end", "monotonic_ns": 200, "details": {}},
+                ]
+                (run_directory / f"rank-{rank}.events.jsonl").write_text(
+                    "\n".join(json.dumps(event) for event in events) + "\n",
+                    encoding="utf-8",
+                )
         return {
-            "run_id": f"run-{len(calls):02d}",
-            "manifest": {"participation_valid": True, "exit_status": "completed"},
+            "run_id": run_id,
+            "manifest": {
+                "participation_valid": True,
+                "exit_status": "completed",
+                "workload_name": workload,
+                "config": config,
+            },
             "pcie_supported": True,
             "pcie_total_mean_bytes_per_s": signal,
             "pcie_total_median_bytes_per_s": signal,
@@ -228,6 +264,12 @@ def test_standard_sweep_collects_idle_and_four_repeated_payloads(tmp_path, monke
     assert result["status"] == "supported"
     assert len(calls) == 15
     assert [name for name, _ in calls].count("calibration_idle") == 3
+    assert {name for name, _ in calls if name != "calibration_idle"} == {
+        "collective_all_reduce_1mib",
+        "collective_all_reduce_4mib",
+        "collective_all_reduce_16mib",
+        "collective_all_reduce_64mib",
+    }
     assert {item["payload_mib"] for item in result["payload_summaries"]} == {
         1.0,
         4.0,
@@ -239,3 +281,106 @@ def test_standard_sweep_collects_idle_and_four_repeated_payloads(tmp_path, monke
     saved = json.loads(Path(result["path"]).read_text(encoding="utf-8"))
     assert saved["schema_version"] == CURRENT_SCHEMA_VERSION
     assert saved["modern_capture_gate_passed"] is True
+    assert result["standard_sweep_validation"]["planned_run_count"] == 15
+    assert result["standard_sweep_validation"]["clean_standard_calibration"] is True
+    assert len(list((tmp_path / "results/calibration-sweeps").glob("*/started.json"))) == 1
+    assert len(list((tmp_path / "results/calibration-sweeps").glob("*/completed.json"))) == 1
+
+    with pytest.raises(ArtifactExistsError, match="completed calibration sweep"):
+        orchestrator.run_calibration_sweep(output=tmp_path, provenance=context)
+
+    first_idle = next(
+        row for row in result["observations"] if row["observation_type"] == "idle_baseline"
+    )
+    event_path = tmp_path / first_idle["run_directory"] / "rank-0.events.jsonl"
+    with event_path.open("a", encoding="utf-8") as stream:
+        stream.write(
+            json.dumps(
+                {
+                    "event": "collective_complete",
+                    "monotonic_ns": 175,
+                    "details": {"collective": "all_reduce"},
+                }
+            )
+            + "\n"
+        )
+    with pytest.raises(CalibrationError, match="measured collective events"):
+        validate_standard_calibration_result(tmp_path, result)
+
+
+def test_payload_specific_calibration_identities_are_stable() -> None:
+    names = [calibration_workload_name("all_reduce", payload) for payload in (1, 4, 16, 64)]
+
+    assert names == [
+        "collective_all_reduce_1mib",
+        "collective_all_reduce_4mib",
+        "collective_all_reduce_16mib",
+        "collective_all_reduce_64mib",
+    ]
+    for payload, name in zip((1, 4, 16, 64), names, strict=True):
+        config = get_workload(name)
+        assert config["payload_mib"] == payload
+        assert config["collective"] == "all_reduce"
+        assert f"-{payload}mib-" in config["config_id"]
+
+
+def test_run_rejects_payload_that_disagrees_with_calibration_name(tmp_path) -> None:
+    with pytest.raises(ValueError, match="identity conflicts"):
+        orchestrator.run_experiment(
+            "collective_all_reduce_1mib",
+            output=tmp_path,
+            overrides={"payload_mib": 4},
+        )
+    assert not list(tmp_path.iterdir())
+
+
+def test_partial_sweep_is_preserved_and_rejected_on_retry(tmp_path, monkeypatch) -> None:
+    context = ProvenanceContext(
+        experiment_session_id="session-partial",
+        collection_id="collection-partial",
+        corpus_id="corpus-partial",
+        node_id="node-0",
+        source_commit="a" * 40,
+        source_dirty=False,
+        notebook_version="calibration-v3",
+        input_archive_sha256=None,
+        random_seed=1337,
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "run_experiment",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("interrupted")),
+    )
+
+    with pytest.raises(RuntimeError, match="interrupted"):
+        orchestrator.run_calibration_sweep(output=tmp_path, provenance=context)
+
+    assert len(list((tmp_path / "results/calibration-sweeps").glob("*/started.json"))) == 1
+    assert not list((tmp_path / "results/calibration-sweeps").glob("*/completed.json"))
+    with pytest.raises(ArtifactExistsError, match="partial or in-progress"):
+        orchestrator.run_calibration_sweep(output=tmp_path, provenance=context)
+
+
+def test_sweep_is_allowed_in_a_new_output_directory(tmp_path, monkeypatch) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    context = ProvenanceContext(
+        experiment_session_id="session-new-root",
+        collection_id="collection-new-root",
+        corpus_id="corpus-new-root",
+        node_id="node-0",
+        source_commit="a" * 40,
+        source_dirty=False,
+        notebook_version="calibration-v3",
+        input_archive_sha256=None,
+        random_seed=1337,
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "run_experiment",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("stop after marker")),
+    )
+    for output in (first, second):
+        with pytest.raises(RuntimeError, match="stop after marker"):
+            orchestrator.run_calibration_sweep(output=output, provenance=context)
+        assert len(list((output / "results/calibration-sweeps").glob("*/started.json"))) == 1
