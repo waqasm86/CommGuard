@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## Unreleased (0.2.0 candidate)
 
 - Add explicit session/collection/corpus/node provenance, schema-2 legacy
   migration, declared corpus membership, per-plan coverage, timestamp-aligned

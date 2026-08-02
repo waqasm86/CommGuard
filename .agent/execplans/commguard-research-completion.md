@@ -129,7 +129,8 @@ Acceptance: all available CPU, lint, format, build, import, CLI, notebook, secre
 - [x] `2026-08-02T15:48:00+05:00` Phase 08 acceptance: 124 CPU-safe tests passed, one optional scikit-learn integration test skipped, and five hardware tests were deselected. Ruff check/format, wheel/sdist build, CPU import, CLI help, notebook regeneration/JSON/cell compilation/output/source-policy checks, and `git diff --check` passed. Safe archive regressions cover hash mismatch, create-only restore, traversal, links, and exact extraction-summary selection. Mocked CPU orchestration proves the adversarial corpus plan exists before ten development/hardening launches while the declared DiLoCo-inspired final family/config remains sealed. Historical executed notebook hashes stayed unchanged; no GPU, Kaggle, detector, or adversarial result was produced.
 - [x] `2026-08-02T16:24:00+05:00` Phase 09 completed: added an immutable evidence index with archive/notebook hashes, source identities, statuses, and claim boundaries; exact current-results/coverage-failure analysis; a populated research-report template with corpus, split, per-family, and adversarial-cost tables; applicant technical evidence notes that explicitly avoid application prose; and complete research/software attribution. README now leads with the PCIe-only negative result and the four-notebook immutable workflow. Architecture, methodology, schemas, artifacts, central deployment assumptions, Kaggle, reproducibility, safety, limitations, acceptance status, and changelog are aligned.
 - [x] `2026-08-02T16:24:00+05:00` Phase 09 acceptance: 128 CPU-safe tests passed, one optional scikit-learn integration test skipped, and five hardware tests were deselected. Ruff check/format and wheel/sdist build passed. Documentation tests verify the five historical archive hashes, negative-result wording, unexecuted report status, lack of mutable `@main` installation, and every local Markdown link. Report regressions cover current communication-only results, coverage/split/per-family tables, legacy PCIe-only archives, and exact input artifact hashes. The ignored detector archive was hash-verified, safely restored to a fresh temporary directory, and successfully rendered without modifying evidence.
-- [ ] Execute Phase 10 and stop before push unless explicitly approved.
+- [x] `2026-08-02` Phase 10 completed locally: set the documented `0.2.0` candidate version, added a reproducible delivery-policy scanner and regression, prepared the completion report, PR body, release notes, reviewer/Kaggle handoff, and exact unexecuted push command. No push, GPU workload, adversarial run, or physical multi-node deployment was performed.
+- [x] `2026-08-02` Phase 10 acceptance: 129 CPU-safe tests passed, one optional scikit-learn integration test skipped, and five hardware tests were deselected. Ruff check/format and wheel/sdist build passed; a fresh isolated environment installed/imported the wheel and ran its CLI; package metadata, dependency health, canonical notebook regeneration/output policy, Markdown links, diff whitespace, and delivery secret/path/archive/cache/symlink/size policy passed. Local Python is 3.11.15; Python 3.10 remains configured in CI because no 3.10 interpreter is installed on this host.
 
 ## Decision log
 
@@ -137,7 +138,7 @@ Acceptance: all available CPU, lint, format, build, import, CLI, notebook, secre
 - `2026-08-02`: Treat `environment_fingerprint` as an environment description only. Existing per-run values will be loaded as legacy ambiguous grouping, never silently upgraded into true session IDs.
 - `2026-08-02`: Preserve old artifacts byte-for-byte. New schemas/loaders may adapt them in memory and new derived artifacts may reference their hashes.
 - `2026-08-02`: Keep required core dependencies empty. Analysis, telemetry, and optional online serving stay in extras or use the standard library where practical.
-- `2026-08-02`: Use version `0.2.0` only if the implementation/schema/API milestones are completed and documented; otherwise use an explicit prerelease. Final decision is deferred until Phase 09.
+- `2026-08-02`: Use version `0.2.0` as an unreleased candidate because the implementation, schema, API, notebook, and documentation milestones are complete and CPU-verified. Do not describe it as a validated detector release; GPU evidence remains gated and pending.
 - `2026-08-02`: Do not install missing build tooling without explicit approval. First check whether a truthful equivalent build validation is available; otherwise record/request the dependency at the gate.
 - `2026-08-02`: Continue the existing partial Phase 02 implementation selectively. Do not replace it wholesale; first make its v2 manifest requirements coherent with orchestration and add regression tests for every new contract.
 - `2026-08-02`: Treat a corpus as a deliberate matrix that may span sessions. Each session-specific collection manifest has a unique `collection_id` and true `experiment_session_id`, while deliberately repeated collections may share the same `corpus_id`.
@@ -172,6 +173,7 @@ Acceptance: all available CPU, lint, format, build, import, CLI, notebook, secre
 - The prior adversarial implementation had only gradient accumulation, idle padding, and parameter-efficient DDP variants, mixed them into the standard profile, and recorded no common sync/cost/correctness contract. Its apparent “segmentation” roadmap was not code. Phase 07 replaces that profile boundary and adds bounded CPU-verifiable semantics, but CUDA/NCCL correctness and all outcome claims remain pending hardware.
 - The earlier canonical notebook set used mutable staged workflows and could not safely chain multiple feature extractions in one restored artifact tree. Phase 08 makes the exact extraction-summary identity explicit and uses an SDK archive loader that rejects mismatched hashes, existing destinations, traversal, duplicate members, links, special members, and configured size/member overages.
 - The historical detector artifact's amended split is whole-run but not a valid current session holdout. It has four train, two validation, and two test runs; the three test windows come from one DDP and one idle run. Its old two-run bootstrap interval is rejected by the current 20-independent-test-run minimum, even though the raw historical result remains immutable.
+- Final local validation used Python 3.11.15. Python 3.10 and the optional scikit-learn analysis integration could not be exercised without changing the host dependency environment; the configured Python 3.10/3.11 CI matrix and truthful optional-test skip remain in place.
 
 ## Schema migrations
 
@@ -266,6 +268,12 @@ rounds pass locally. The optional analysis stack and all GPU execution remain
 unavailable, so no evasion, false-positive, efficiency, quality, or robustness
 result is claimed.
 
+Phase 10 validation update: the full CPU-safe suite has 129 passes, one optional
+analysis skip, and five hardware deselections. Ruff check/format, the 0.2.0 wheel
+and sdist build, clean-environment wheel import/CLI, dependency health, notebook
+generation/output checks, documentation links, and delivery policy scans pass.
+The branch is prepared for human review but intentionally remains unpushed.
+
 ## Recovery and idempotence
 
 - Never use Git reset, clean, force checkout, history rewrite, or force push.
@@ -284,4 +292,17 @@ result is claimed.
 
 ## Final retrospective
 
-Pending. At completion this section will distinguish completed CPU-safe engineering, historical measured evidence preserved, hardware-dependent checks not executed, unresolved risks, and the single highest-value next experiment.
+All phases that can be completed truthfully on this CPU-only Ubuntu host are
+complete. The repository now has CPU-tested provenance, coverage, evaluation,
+central-monitoring, benign/adversarial orchestration, notebook, evidence, and
+delivery contracts. Historical executed notebooks and raw archives were
+preserved byte-for-byte and remain local-only; their indexed evidence still
+supports only the negative DDP-versus-idle PCIe pilot result.
+
+The unresolved risks are empirical: no new CUDA/NCCL/NVML run, valid eight-family
+benign corpus, detector-performance result, adversarial outcome, or physical
+multi-node validation exists. The highest-value next experiment is the gated
+24-run benign matrix on Kaggle T4 x2, starting from a reviewed remote-visible
+commit and proceeding to detector evaluation only if the strict primary coverage
+artifact passes. Adversarial execution requires separate human approval. Git
+push is also a human gate and was not performed.

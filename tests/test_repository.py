@@ -93,6 +93,18 @@ def test_canonical_notebooks_match_their_generator() -> None:
     assert result.returncode == 0, result.stderr
 
 
+def test_delivery_policy_scan_passes() -> None:
+    result = subprocess.run(
+        [sys.executable, "tools/verify_delivery.py"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_core_install_has_no_forced_dependencies() -> None:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text())
     assert project["project"]["name"] == "commguard"
@@ -122,8 +134,13 @@ def test_evidence_docs_preserve_the_negative_result_and_archive_hashes() -> None
 
 
 def test_local_markdown_links_resolve() -> None:
-    markdown_paths = [ROOT / "README.md", *sorted((ROOT / "docs").glob("*.md"))]
+    markdown_paths = [
+        ROOT / "README.md",
+        ROOT / "CODEX_COMPLETION_REPORT.md",
+        *sorted((ROOT / "docs").glob("*.md")),
+    ]
     markdown_paths.extend(sorted((ROOT / "reports").glob("*.md")))
+    markdown_paths.extend(sorted((ROOT / "delivery").glob("*.md")))
     for source_path in markdown_paths:
         source = source_path.read_text(encoding="utf-8")
         for target in re.findall(r"\[[^]]+\]\(([^)]+)\)", source):
