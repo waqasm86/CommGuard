@@ -216,6 +216,21 @@ def test_unusable_idle_rows_do_not_silently_disable_capture_gate() -> None:
     assert "idle baseline rows" in " ".join(result["falsification_reasons"])
 
 
+def test_failed_idle_runs_remain_unusable() -> None:
+    rows = [row(0, 100_000, idle=True)]
+    rows += [row(0, 110_000, idle=True, participation_valid=False) for _ in range(2)]
+    rows += repeated(1, [2_000_000, 2_100_000, 1_900_000])
+    rows += repeated(4, [4_000_000, 4_100_000, 3_900_000])
+    rows += repeated(16, [8_000_000, 8_100_000, 7_900_000])
+
+    result = analyze_calibration(rows)
+
+    assert result["idle_baseline_repetitions"] == 3
+    assert result["idle_baseline_usable_repetitions"] == 1
+    assert result["status"] == "not_supported"
+    assert result["modern_capture_gate_passed"] is False
+
+
 def test_single_repetition_is_inconclusive_not_supported() -> None:
     rows = [row(0, 100_000, idle=True)]
     rows += [row(1, 2_000_000), row(4, 4_000_000), row(16, 8_000_000)]
