@@ -86,3 +86,14 @@ Workload events retain rank-local progress and checksums. Feature rows retain
 split metadata separately from numeric features. Split assignments map a whole
 run to one split. Evaluation and calibration results record their thresholds,
 metrics, grouping unit, limitations, and source artifacts.
+
+## Central protocol messages
+
+Central-monitoring messages use protocol version `1.0`, separate from research
+artifact schema versioning. `telemetry_batch` and `heartbeat` messages carry
+agent/node/session identity, a strictly increasing sequence, UTC time, and an
+HMAC-SHA256 signature. Batches also carry a unique ID, previous-batch link,
+monotonic interval, and exact allow-listed telemetry samples. Responses are
+`ingestion_ack`, `protocol_error`, and `detector_decision` records. Decisions
+include score (or null on abstention), threshold, reason, model name/version,
+and evidence window IDs. Offline request/ack logs are create-only.

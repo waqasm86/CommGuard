@@ -116,7 +116,9 @@ Acceptance: all available CPU, lint, format, build, import, CLI, notebook, secre
 - [x] `2026-08-02T14:13:00+05:00` Phase 04 started from clean commit `3163275`; replace environment-fingerprint grouping, validate the split hierarchy, and separate train/validation selection from final test reporting.
 - [x] `2026-08-02T14:25:52+05:00` Phase 04 completed CPU-safe implementation: true-session-aware split plans persist actual strategies and exact groups; deterministic fallback preserves whole runs, classes, and required families; family/config holdouts are explicit diagnostics; primary reporting is 30-second communication-only; and model/threshold selection accepts validation data only.
 - [x] `2026-08-02T14:25:52+05:00` Phase 04 acceptance: 89 CPU-safe tests passed, one optional analysis integration test skipped, and five hardware tests were deselected; Ruff check/format passed. The project virtualenv lacks the declared `analysis` extra (`pandas`, NumPy, scikit-learn), so no dependency was installed and no detector metrics were fabricated; dependency-free tests cover the split hierarchy, one-class refusal, legacy ambiguity, old per-run environment-fingerprint regression, family/config modes, selection isolation, schema, and small-group interval suppression.
-- [ ] Execute Phase 05 and its acceptance checks.
+- [x] `2026-08-02T14:28:00+05:00` Phase 05 started from clean commit `ea48109`; implement the signed, privacy-bounded offline reference path before optional online adapters.
+- [x] `2026-08-02T14:35:56+05:00` Phase 05 completed: added versioned batch/heartbeat/ack/decision/error messages, canonical HMAC, exact sample allow-lists, payload/clock/sequence/replay/chain validation, bounded node agents with retry buffers, create-only offline logs, cross-node UTC aggregation, node health, forced abstention on incomplete windows, and optional HTTPS client/handler references.
+- [x] `2026-08-02T14:35:56+05:00` Phase 05 acceptance: 94 CPU-safe tests passed, one optional analysis test skipped, and five hardware tests were deselected; Ruff check/format, CPU import, and diff checks passed. The five central tests include a local two-agent success path plus replay, stale/gapped order, invalid signature/chain, oversized payload, unknown protocol, privacy rejection, clock skew, buffered retry, node loss, and abstention. No socket/TLS/physical multi-node execution is claimed.
 - [ ] Execute Phase 06 and its acceptance checks.
 - [ ] Execute Phase 07 and its acceptance checks.
 - [ ] Execute Phase 08 and its acceptance checks.
@@ -136,6 +138,7 @@ Acceptance: all available CPU, lint, format, build, import, CLI, notebook, secre
 - `2026-08-02`: Keep `session_fingerprint` only as a compatibility alias in new environment reports. It equals `environment_fingerprint`, is explicitly non-semantic for grouping, and live telemetry values are excluded from its stable-capability hash.
 - `2026-08-02`: Define 30 seconds as the immutable primary feature window and 5/15 seconds as diagnostics. Benign workload defaults collect 35 measured seconds after warmup so asynchronous sampler edges do not make a nominal 30-second run incapable of producing a 30-second common window.
 - `2026-08-02`: Require at least three primary runs per required family for detector evaluation, because a valid train/validation/test plan cannot represent a family with fewer. Derive stable configuration IDs from family plus canonical configuration when the plan does not provide one explicitly.
+- `2026-08-02`: Keep central protocol versioning separate from research artifact schemas. Use a standard-library, create-only offline transport as the authoritative test path; expose online HTTPS components only as operator-wrapped references with external TLS/identity/secret requirements.
 
 ## Discoveries
 
@@ -150,6 +153,7 @@ Acceptance: all available CPU, lint, format, build, import, CLI, notebook, secre
 - At the Phase 02 resumption boundary, schema validation accepts v2 but the orchestrator still constructs a v2 `RunManifest` without required session/corpus/node/dirty/seed fields. Existing tests do not exercise that path because GPU orchestration is hardware-marked.
 - Iteration-only completion was not sufficient evidence of usable telemetry duration. Rank-local measurement events and their common monotonic intersection are now required for completed, participation-valid v2 manifests; physical GPU execution remains pending compatible hardware.
 - The Phase 04 host has the development tools but not the optional analysis stack. Split and selection-policy behavior is fully CPU/dependency-free tested; fitting pandas/scikit-learn models remains unexecuted locally and must not be reported as a measured detector result.
+- Cross-node aggregation must use validated UTC timestamps because monotonic clocks are node-local. The local simulation sets `physical_multi_node_validated: false`; it cannot establish network, TLS, clock-sync, durability, or GPU-cluster behavior.
 
 ## Schema migrations
 
@@ -217,6 +221,11 @@ legacy grouping refusal, selection isolation, primary-report schema, and
 small-independent-group warnings pass locally. The optional pandas/scikit-learn
 integration test is skipped because the `analysis` extra is not installed; no
 local model metrics are claimed.
+
+Phase 05 validation update: central protocol schemas, HMAC/allow-list/size/order
+controls, offline transport, two-agent aggregation, node staleness, retry, and
+decision abstention pass locally. Online TLS and physical multi-node behavior
+remain pending external deployment and hardware.
 
 ## Recovery and idempotence
 

@@ -19,6 +19,11 @@ unique or complete measure of inter-GPU traffic. A high test score is not
 evidence of adversarial robustness. Two T4 GPUs do not represent two 8-GPU
 nodes.
 
+Central telemetry accepts only sample identity/timing, GPU identity, and the
+nine declared content-agnostic field readings. Prompt, token, dataset, example,
+content, model-weight, credential, secret, and API-key fields are rejected.
+This allow-list reduces collection scope but is not a proof of privacy.
+
 SPAR application free-response text is outside this repository's purpose.
 CommGuard documentation and reports describe only technical repository
 behavior and measurements; they must not be repurposed as AI-written
