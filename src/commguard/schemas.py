@@ -288,6 +288,125 @@ class RunManifest:
                     "measured_duration_seconds",
                     "must equal the monotonic measurement interval",
                 )
+                if self.designation == "adversarial":
+                    rank_evidence = self.config.get("rank_runtime_evidence")
+                    _require(
+                        isinstance(rank_evidence, Mapping) and set(rank_evidence) == {"0", "1"},
+                        "config.rank_runtime_evidence",
+                        "completed adversarial runs require both ranks",
+                    )
+                    assert isinstance(rank_evidence, Mapping)
+                    sync_counts: list[int] = []
+                    for rank in ("0", "1"):
+                        evidence = rank_evidence[rank]
+                        _require(
+                            isinstance(evidence, Mapping)
+                            and isinstance(evidence.get("strategy_summary"), Mapping),
+                            f"config.rank_runtime_evidence.{rank}.strategy_summary",
+                            "required for completed adversarial runs",
+                        )
+                        summary = evidence["strategy_summary"]
+                        assert isinstance(summary, Mapping)
+                        expected = summary.get("expected_sync_rounds")
+                        actual = summary.get("actual_sync_rounds")
+                        _require(
+                            isinstance(expected, int)
+                            and expected >= 0
+                            and isinstance(actual, int)
+                            and actual >= 0,
+                            f"config.rank_runtime_evidence.{rank}.strategy_summary",
+                            "sync counts must be non-negative integers",
+                        )
+                        _require(
+                            expected == actual,
+                            f"config.rank_runtime_evidence.{rank}.strategy_summary",
+                            "expected and actual sync counts differ",
+                        )
+                        sync_counts.append(actual)
+                        _require(
+                            isinstance(summary.get("communication_bytes_proxy"), int)
+                            and summary["communication_bytes_proxy"] >= 0,
+                            f"config.rank_runtime_evidence.{rank}.strategy_summary",
+                            "communication byte proxy must be non-negative",
+                        )
+                        for count_name in (
+                            "optimizer_steps",
+                            "inference_steps",
+                            "processed_tokens",
+                        ):
+                            _require(
+                                isinstance(summary.get(count_name), int)
+                                and summary[count_name] >= 0,
+                                f"config.rank_runtime_evidence.{rank}.strategy_summary.{count_name}",
+                                "must be a non-negative integer",
+                            )
+                        for metric_name in (
+                            "throughput_tokens_per_s",
+                            "final_loss_proxy",
+                            "detector_score",
+                        ):
+                            value = summary.get(metric_name)
+                            _require(
+                                value is None
+                                or (
+                                    isinstance(value, (int, float))
+                                    and not isinstance(value, bool)
+                                    and math.isfinite(float(value))
+                                    and value >= 0
+                                ),
+                                f"config.rank_runtime_evidence.{rank}.strategy_summary.{metric_name}",
+                                "must be null or a finite numeric value",
+                            )
+                        _require(
+                            isinstance(summary.get("wall_time_s"), (int, float))
+                            and math.isfinite(float(summary["wall_time_s"]))
+                            and summary["wall_time_s"] >= 0,
+                            f"config.rank_runtime_evidence.{rank}.strategy_summary.wall_time_s",
+                            "must be finite and non-negative",
+                        )
+                        for text_name in (
+                            "strategy_id",
+                            "communication_proxy_definition",
+                            "detector_score_status",
+                        ):
+                            _require(
+                                bool(summary.get(text_name)),
+                                f"config.rank_runtime_evidence.{rank}.strategy_summary.{text_name}",
+                                "must be non-empty",
+                            )
+                        _require(
+                            summary.get("strategy_id") == self.config.get("strategy_id"),
+                            f"config.rank_runtime_evidence.{rank}.strategy_summary.strategy_id",
+                            "must match run configuration",
+                        )
+                        _require(
+                            summary.get("detector_score") is None
+                            and summary.get("detector_model") is None
+                            and summary.get("detector_score_status") == "pending_frozen_evaluation",
+                            f"config.rank_runtime_evidence.{rank}.strategy_summary.detector_score",
+                            "run execution cannot invent a detector score",
+                        )
+                        memory_peak = evidence.get("memory_peak")
+                        _require(
+                            isinstance(memory_peak, Mapping)
+                            and isinstance(memory_peak.get("allocated_bytes"), int)
+                            and memory_peak["allocated_bytes"] >= 0
+                            and isinstance(memory_peak.get("reserved_bytes"), int)
+                            and memory_peak["reserved_bytes"] >= 0,
+                            f"config.rank_runtime_evidence.{rank}.memory_peak",
+                            "requires non-negative allocated and reserved bytes",
+                        )
+                        if self.workload_label == "training":
+                            _require(
+                                summary.get("parameter_state_agreement") is True,
+                                f"config.rank_runtime_evidence.{rank}.strategy_summary",
+                                "training strategy requires final parameter agreement",
+                            )
+                    _require(
+                        len(set(sync_counts)) == 1,
+                        "config.rank_runtime_evidence.strategy_summary",
+                        "ranks reported different sync counts",
+                    )
 
     def to_dict(self) -> dict[str, Any]:
         self.validate()
@@ -470,6 +589,16 @@ def validate_artifact(data: Mapping[str, Any]) -> None:
             "selection_mode",
             "implicit selection is prohibited",
         )
+        if "selected_designations" in data:
+            selected = data["selected_designations"]
+            _require(
+                isinstance(selected, list)
+                and bool(selected)
+                and len(selected) == len(set(selected))
+                and set(selected) <= {"benign", "adversarial", "calibration"},
+                "selected_designations",
+                "must be a non-empty unique supported list",
+            )
 
 
 def _require_fields(data: Mapping[str, Any], path: str, names: tuple[str, ...]) -> None:

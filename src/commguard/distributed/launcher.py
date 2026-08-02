@@ -67,7 +67,11 @@ def _stale_worker_pids() -> list[int]:
     return sorted(pids)
 
 
-def validate_participation(output: str | Path, mode: str) -> tuple[bool, list[str], dict[str, int]]:
+def validate_participation(
+    output: str | Path,
+    mode: str,
+    designation: str | None = None,
+) -> tuple[bool, list[str], dict[str, int]]:
     root = Path(output)
     problems: list[str] = []
     startups: list[dict[str, Any]] = []
@@ -86,6 +90,18 @@ def validate_participation(output: str | Path, mode: str) -> tuple[bool, list[st
         }
     if mode == "calibration":
         required.add("collective_complete")
+    if mode == "sparse_sync_training":
+        required |= {
+            "model_ready",
+            "forward_complete",
+            "backward_complete",
+            "parameter_average_complete",
+            "memory_peak",
+        }
+    if mode == "synthetic_communication_decoy":
+        required |= {"decoy_burst_complete", "memory_peak"}
+    if designation == "adversarial":
+        required.add("strategy_summary")
     for rank in (0, 1):
         events = _load_rank_events(root, rank)
         names = {event.get("event") for event in events}
@@ -204,7 +220,11 @@ def launch_torchrun(
         cleanup_complete = _terminate_tree(process)
         stdout, stderr = process.communicate()
     duration = time.monotonic() - started
-    valid, problems, rank_codes = validate_participation(output_path, str(config["mode"]))
+    valid, problems, rank_codes = validate_participation(
+        output_path,
+        str(config["mode"]),
+        str(config.get("designation", "")),
+    )
     if timed_out:
         problems.append("torchrun exceeded the hard timeout")
         valid = False

@@ -44,14 +44,21 @@ def corpus(*plans: PlannedRun) -> CorpusManifest:
     )
 
 
-def manifest(run_id: str, family: str, label: str, *, warmup: float) -> RunManifest:
+def manifest(
+    run_id: str,
+    family: str,
+    label: str,
+    *,
+    warmup: float,
+    designation: str = "benign",
+) -> RunManifest:
     timestamp = datetime(2026, 8, 1, tzinfo=timezone.utc).isoformat()
     return RunManifest(
         run_id=run_id,
         workload_name=family,
         workload_label=label,
         workload_family=family,
-        designation="benign",
+        designation=designation,
         seed=1337,
         world_size=2,
         config={},
@@ -109,10 +116,11 @@ def write_run(
     *,
     warmup: float,
     duration: float,
+    designation: str = "benign",
 ) -> None:
     store = ArtifactStore(root)
     store.initialize()
-    run_manifest = manifest(run_id, family, label, warmup=warmup)
+    run_manifest = manifest(run_id, family, label, warmup=warmup, designation=designation)
     store.write_json(f"runs/{run_id}/manifest.json", run_manifest.to_dict())
     store.write_jsonl(f"runs/{run_id}/telemetry.jsonl", telemetry(run_id, duration))
 
@@ -164,6 +172,41 @@ def test_every_planned_run_gets_one_coverage_record(tmp_path) -> None:
     malformed["rows_per_gpu"].pop("1")
     with pytest.raises(ValidationError, match="rows_per_gpu"):
         validate_artifact(malformed)
+
+
+def test_combined_selection_keeps_benign_and_adversarial_designations_explicit(tmp_path) -> None:
+    write_run(tmp_path, "run-benign", "ddp_training", "training", warmup=0, duration=6)
+    write_run(
+        tmp_path,
+        "run-adversarial",
+        "periodic_local_sgd",
+        "training",
+        warmup=0,
+        duration=6,
+        designation="adversarial",
+    )
+    plans = (
+        PlannedRun("benign", "ddp_training", "training", {}, accepted_run_id="run-benign"),
+        PlannedRun(
+            "adversarial",
+            "periodic_local_sgd",
+            "training",
+            {},
+            designation="adversarial",
+            accepted_run_id="run-adversarial",
+        ),
+    )
+
+    result = extract_feature_result(
+        tmp_path,
+        corpus(*plans),
+        window_lengths=(5.0,),
+        selected_designation=("benign", "adversarial"),
+    )
+
+    assert result.selected_designations == ("benign", "adversarial")
+    assert {row["designation"] for row in result.features} == {"benign", "adversarial"}
+    assert all(record.status == "included" for record in result.coverage)
 
 
 def test_short_historical_run_reports_exact_post_warmup_duration(tmp_path) -> None:

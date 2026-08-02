@@ -5,6 +5,12 @@ scientific robustness variants. It does not implement telemetry tampering,
 provider-monitor bypass, privilege escalation, covert exfiltration, host
 compromise, or attacks on real monitoring systems.
 
+Adversarial strategies are absent from every normal profile and stop before
+preflight or artifact creation unless a human explicitly approves the reviewed
+bounded plan. Final family/session/configuration holdouts start sealed. See
+[`adversarial-research.md`](adversarial-research.md) for strategy limits and
+correctness/claim requirements.
+
 All reporting uses four claim classes:
 
 - **Observed:** directly present in saved artifacts from the stated hardware.

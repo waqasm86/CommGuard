@@ -6,18 +6,25 @@ import json
 import os
 import random
 import statistics
+import time
 from collections import Counter
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from commguard.adversarial import strategy_for_config
 from commguard.artifacts import ArtifactStore
 from commguard.calibration import analyze_calibration
 from commguard.corpus import CorpusManifest, PlannedRun
 from commguard.distributed.launcher import LaunchResult, launch_torchrun
 from commguard.environment.preflight import check_environment
-from commguard.exceptions import CalibrationError, CoverageError, WorkloadError
+from commguard.exceptions import (
+    ApprovalRequiredError,
+    CalibrationError,
+    CoverageError,
+    WorkloadError,
+)
 from commguard.features import (
     PRIMARY_BENIGN_FAMILIES,
     PRIMARY_WINDOW_SECONDS,
@@ -119,6 +126,7 @@ def _write_run_evidence(
                     "model_ready",
                     "memory_peak",
                     "measurement_interval",
+                    "strategy_summary",
                 }:
                     evidence[str(event["event"])] = event.get("details", {})
                 if event.get("event") == "measurement_interval":
@@ -250,15 +258,38 @@ def run_experiment(
     strict_preflight: bool = True,
     raise_on_failure: bool = True,
     provenance: ProvenanceContext | None = None,
+    adversarial_approval: bool = False,
 ) -> dict[str, Any]:
     """Run one isolated two-rank experiment and preserve success or failure evidence."""
+    config = get_workload(workload)
+    if overrides:
+        identity_fields = {
+            "config_id",
+            "strategy_id",
+            "mode",
+            "label",
+            "family",
+            "designation",
+            "enabled_by_default",
+            "requires_human_approval",
+        }
+        changed_identity = sorted(
+            key for key in identity_fields & set(overrides) if overrides[key] != config.get(key)
+        )
+        if changed_identity:
+            raise ValueError(f"workload identity fields cannot be overridden: {changed_identity}")
+        config.update(overrides)
+    if config["designation"] == "adversarial" and not adversarial_approval:
+        raise ApprovalRequiredError(
+            f"workload={workload} family={config['family']} is a bounded defensive red-team "
+            "strategy; pass explicit adversarial approval only after reviewing its plan"
+        )
+    if config["designation"] == "adversarial":
+        strategy_for_config(config)
     store = ArtifactStore(output)
     store.initialize()
     context = provenance or ProvenanceContext.create(corpus_id=new_corpus_id(workload))
     preflight = check_environment(strict=strict_preflight, provenance=context)
-    config = get_workload(workload)
-    if overrides:
-        config.update(overrides)
     run_id = new_run_id(workload, context.experiment_session_id)
     config.update(
         {
@@ -373,6 +404,123 @@ def run_calibration_sweep(
     path = store.write_json(f"results/calibration-{timestamp}.json", result)
     result["path"] = str(path)
     return result
+
+
+def run_segmented_series(
+    output: str | Path = "artifacts",
+    *,
+    adversarial_approval: bool = False,
+    timeout_s: float = 180.0,
+) -> dict[str, Any]:
+    """Run separately launched short DDP segments after an explicit human gate."""
+    workload = "adversarial_segmented_runs"
+    config = get_workload(workload)
+    if not adversarial_approval:
+        raise ApprovalRequiredError(
+            "segmented_runs is a bounded defensive red-team series; explicit approval is required"
+        )
+    root = Path(output)
+    calibration_paths = sorted((root / "results").glob("calibration-*.json"))
+    calibration = (
+        json.loads(calibration_paths[-1].read_text(encoding="utf-8")) if calibration_paths else None
+    )
+    if calibration is None or calibration.get("status") != "supported":
+        status = "missing" if calibration is None else str(calibration.get("status"))
+        raise CalibrationError(
+            f"segmented adversarial series requires supported calibration; observed={status}"
+        )
+    context = ProvenanceContext.create(corpus_id=new_corpus_id("segmented-runs"))
+    segment_count = int(config["segment_count"])
+    segment_seconds = float(config["segment_seconds"])
+    restart_gap_seconds = float(config["restart_gap_seconds"])
+    segment_group_id = f"segments-{context.experiment_session_id}"
+    plans = tuple(
+        PlannedRun(
+            plan_id=f"segmented-{index:03d}",
+            workload_family=str(config["family"]),
+            target_label=str(config["label"]),
+            config={
+                **config,
+                "workload_name": workload,
+                "segment_index": index,
+                "segment_group_id": segment_group_id,
+            },
+            designation="adversarial",
+            random_seed=int(config.get("seed", 1337)),
+            workload_config_id=str(config["config_id"]),
+        )
+        for index in range(segment_count)
+    )
+    store = ArtifactStore(output)
+    store.initialize()
+    plan_manifest = _corpus_manifest(context, plans)
+    plan_path = store.write_json(
+        f"corpora/{context.corpus_id}-plan.json",
+        plan_manifest.to_dict(),
+    )
+    outcomes: list[dict[str, Any]] = []
+    finalized: list[PlannedRun] = []
+    for index, plan in enumerate(plans):
+        outcome = run_experiment(
+            workload,
+            output=output,
+            overrides={
+                "segment_index": index,
+                "segment_group_id": segment_group_id,
+                "warmup_seconds": float(config["warmup_seconds"]),
+                "min_measured_seconds": segment_seconds,
+            },
+            timeout_s=timeout_s,
+            strict_preflight=True,
+            raise_on_failure=False,
+            provenance=context,
+            adversarial_approval=True,
+        )
+        outcomes.append(outcome)
+        accepted = (
+            str(outcome["run_id"]) if outcome["manifest"]["exit_status"] == "completed" else None
+        )
+        finalized.append(replace(plan, accepted_run_id=accepted))
+        if index + 1 < segment_count:
+            time.sleep(restart_gap_seconds)
+    final_manifest = _corpus_manifest(context, tuple(finalized))
+    final_path = store.write_json(
+        f"corpora/{context.corpus_id}-final.json",
+        final_manifest.to_dict(),
+    )
+    extraction = extract_feature_result(
+        output,
+        final_manifest,
+        output=output,
+        selected_designation="adversarial",
+    )
+    family_summary = _family_summary(tuple(finalized), extraction.coverage)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    summary = {
+        "artifact_kind": "experiment_summary",
+        "schema_version": SCHEMA_VERSION,
+        "summary_type": "segmented_adversarial_series",
+        "strategy_id": "segmented_runs",
+        "segment_group_id": segment_group_id,
+        "segment_count": segment_count,
+        "segment_seconds": segment_seconds,
+        "restart_gap_seconds": restart_gap_seconds,
+        "planned_corpus_manifest": str(plan_path.relative_to(store.root)),
+        "final_corpus_manifest": str(final_path.relative_to(store.root)),
+        "run_ids": [outcome["run_id"] for outcome in outcomes],
+        "completed": sum(plan.accepted_run_id is not None for plan in finalized),
+        "failed": sum(plan.accepted_run_id is None for plan in finalized),
+        "family_counts": family_summary,
+        "feature_extraction": extraction.summary(),
+        "primary_feature_coverage_expected": False,
+        "coverage_note": (
+            "Segments are intentionally shorter than the 30-second primary window and must not "
+            "be concatenated across restart gaps."
+        ),
+        "detector_metrics_computed": False,
+    }
+    store.write_json(f"results/segmented-series-{timestamp}.json", summary)
+    return summary
 
 
 def estimate_matrix(profile: str, repetitions: int = 1) -> dict[str, Any]:

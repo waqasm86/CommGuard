@@ -57,6 +57,11 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--repetitions", type=int)
     run.add_argument("--timeout", type=float, default=180)
     run.add_argument("--negative-calibration-mode", action="store_true")
+    run.add_argument(
+        "--approve-bounded-redteam",
+        action="store_true",
+        help="explicitly approve one reviewed adversarial workload (never implied by a profile)",
+    )
 
     estimate = subparsers.add_parser("estimate", help="estimate profile cost without running GPUs")
     estimate.add_argument("--profile", choices=("smoke", "standard", "extended"), default="smoke")
@@ -120,6 +125,7 @@ def main(argv: list[str] | None = None) -> int:
                     args.workload,
                     output=args.output,
                     timeout_s=args.timeout,
+                    adversarial_approval=args.approve_bounded_redteam,
                 )
                 _json({"run_id": result["run_id"], "manifest": result["manifest"]})
             else:

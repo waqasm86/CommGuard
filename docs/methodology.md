@@ -89,3 +89,11 @@ barrier-cadence, transfer, and optional peer-copy variants. See the
 Falsification includes unresponsive counters, substantial class overlap,
 grouped-score collapse, duration/startup/framework leakage, hard-negative false
 positives, adversarial false negatives, and session instability.
+
+Adversarial evaluation is a later, explicit-approval stage. Its frozen baseline
+fits benign training rows only; adversarial rows cannot affect preprocessing,
+model selection, or threshold selection. A sealed plan keeps one family plus
+declared session/configuration IDs untouched through development and hardening.
+Training variants report evasion with duration/throughput/loss/memory/sync and
+communication proxies, while the synthetic non-training decoy reports false
+positives. See [bounded adversarial research](adversarial-research.md).

@@ -149,6 +149,7 @@ class ExtractionResult:
     corpus_id: str
     requested_window_seconds: tuple[float, ...]
     selection_mode: str = "declared_corpus_manifest"
+    selected_designations: tuple[str, ...] = ("benign",)
 
     def __post_init__(self) -> None:
         for record in self.coverage:
@@ -163,6 +164,15 @@ class ExtractionResult:
             for record in self.coverage
         ):
             raise ValidationError("coverage result contains a different requested-window policy")
+        if (
+            not self.selected_designations
+            or len(self.selected_designations) != len(set(self.selected_designations))
+            or any(
+                value not in {"benign", "adversarial", "calibration"}
+                for value in self.selected_designations
+            )
+        ):
+            raise ValidationError("coverage result has invalid selected designations")
 
     def summary(self) -> dict[str, Any]:
         reasons = Counter(
@@ -173,6 +183,7 @@ class ExtractionResult:
             "schema_version": CURRENT_SCHEMA_VERSION,
             "corpus_id": self.corpus_id,
             "selection_mode": self.selection_mode,
+            "selected_designations": list(self.selected_designations),
             "requested_window_seconds": list(self.requested_window_seconds),
             "planned_run_count": len(self.coverage),
             "included_run_count": sum(record.status == "included" for record in self.coverage),
@@ -217,6 +228,7 @@ def load_extraction_result(input_root: str | Path) -> ExtractionResult:
             float(value) for value in summary["requested_window_seconds"]
         ),
         selection_mode=str(summary["selection_mode"]),
+        selected_designations=tuple(summary.get("selected_designations", ("benign",))),
     )
 
 

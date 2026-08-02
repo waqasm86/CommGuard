@@ -5,6 +5,8 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
+from commguard.adversarial import ADVERSARIAL_STRATEGIES, strategy_for_config
+
 BENIGN_REQUIRED_FAMILIES = (
     "ddp_training",
     "inference_prefill_independent",
@@ -74,34 +76,117 @@ WORKLOADS: dict[str, dict[str, Any]] = {
         "gradient_scaling": False,
         "estimated_seconds": 50,
     },
-    "ddp_train_grad_accum": {
+    "adversarial_gradient_accumulation": {
         **BASE_MODEL,
         "config_id": "gradient-accumulation-4-v1",
+        "strategy_id": "gradient_accumulation",
         "mode": "ddp_train",
         "label": "training",
-        "family": "ddp_gradient_accumulation",
+        "family": "gradient_accumulation",
         "designation": "adversarial",
+        "enabled_by_default": False,
+        "requires_human_approval": True,
         "gradient_accumulation": 4,
         "estimated_seconds": 90,
     },
-    "ddp_train_idle_padding": {
+    "adversarial_periodic_local_sgd": {
         **BASE_MODEL,
-        "config_id": "idle-padding-0.5s-v1",
+        "config_id": "periodic-local-sgd-steps5-v1",
+        "strategy_id": "periodic_local_sgd",
+        "mode": "sparse_sync_training",
+        "label": "training",
+        "family": "periodic_local_sgd",
+        "designation": "adversarial",
+        "enabled_by_default": False,
+        "requires_human_approval": True,
+        "local_steps": 5,
+        "estimated_seconds": 60,
+    },
+    "adversarial_diloco_inspired": {
+        **BASE_MODEL,
+        "config_id": "diloco-inspired-inner10-v1",
+        "strategy_id": "diloco_inspired",
+        "mode": "sparse_sync_training",
+        "label": "training",
+        "family": "diloco_inspired",
+        "designation": "adversarial",
+        "enabled_by_default": False,
+        "requires_human_approval": True,
+        "inner_steps": 10,
+        "estimated_seconds": 60,
+    },
+    "adversarial_segmented_runs": {
+        **BASE_MODEL,
+        "config_id": "segmented-runs-4x10s-gap1s-v1",
+        "strategy_id": "segmented_runs",
         "mode": "ddp_train",
         "label": "training",
-        "family": "ddp_idle_padding",
+        "family": "segmented_runs",
         "designation": "adversarial",
+        "enabled_by_default": False,
+        "requires_human_approval": True,
+        "segment_seconds": 10,
+        "restart_gap_seconds": 1,
+        "segment_count": 4,
+        "warmup_seconds": 1.0,
+        "min_measured_seconds": 10.0,
+        "estimated_seconds": 47,
+    },
+    "adversarial_idle_padding": {
+        **BASE_MODEL,
+        "config_id": "idle-padding-0.5s-v1",
+        "strategy_id": "idle_padding",
+        "mode": "ddp_train",
+        "label": "training",
+        "family": "idle_padding",
+        "designation": "adversarial",
+        "enabled_by_default": False,
+        "requires_human_approval": True,
         "idle_padding_s": 0.5,
         "estimated_seconds": 60,
     },
-    "ddp_train_parameter_efficient": {
+    "adversarial_randomized_synchronization": {
         **BASE_MODEL,
-        "config_id": "parameter-efficient-output-layer-v1",
+        "config_id": "randomized-synchronization-p0.25-v1",
+        "strategy_id": "randomized_synchronization",
+        "mode": "sparse_sync_training",
+        "label": "training",
+        "family": "randomized_synchronization",
+        "designation": "adversarial",
+        "enabled_by_default": False,
+        "requires_human_approval": True,
+        "sync_probability": 0.25,
+        "estimated_seconds": 60,
+    },
+    "adversarial_mixed_training_inference": {
+        **BASE_MODEL,
+        "config_id": "mixed-training-inference-every2-v1",
+        "strategy_id": "mixed_training_inference",
         "mode": "ddp_train",
         "label": "training",
-        "family": "parameter_efficient",
+        "family": "mixed_training_inference",
         "designation": "adversarial",
-        "parameter_efficient": True,
+        "enabled_by_default": False,
+        "requires_human_approval": True,
+        "inference_every": 2,
+        "estimated_seconds": 60,
+    },
+    "adversarial_synthetic_communication_decoy": {
+        "config_id": "synthetic-communication-decoy-4mib-burst4-v1",
+        "strategy_id": "synthetic_communication_decoy",
+        "mode": "synthetic_communication_decoy",
+        "label": "control",
+        "family": "synthetic_communication_decoy",
+        "designation": "adversarial",
+        "enabled_by_default": False,
+        "requires_human_approval": True,
+        "payload_mib": 4,
+        "burst_collectives": 4,
+        "burst_interval_s": 0.5,
+        "iterations": 20,
+        "warmup_seconds": 5.0,
+        "min_measured_seconds": 35.0,
+        "iteration_cap": None,
         "estimated_seconds": 45,
     },
     "inference_prefill_independent": {
@@ -309,6 +394,19 @@ PROFILES["extended"] = PROFILES["standard"] + [
     "control_peer_copy",
 ]
 
+ADVERSARIAL_PROFILES = {
+    "adversarial_pilot": [
+        "adversarial_gradient_accumulation",
+        "adversarial_periodic_local_sgd",
+        "adversarial_diloco_inspired",
+        "adversarial_segmented_runs",
+        "adversarial_idle_padding",
+        "adversarial_randomized_synchronization",
+        "adversarial_mixed_training_inference",
+        "adversarial_synthetic_communication_decoy",
+    ]
+}
+
 
 def validate_workload_registry() -> None:
     """Validate stable identities and the CPU-inspectable benign execution contract."""
@@ -325,6 +423,23 @@ def validate_workload_registry() -> None:
             )
         config_ids[config_id] = name
         if config["designation"] != "benign":
+            if config["designation"] == "adversarial":
+                strategy_for_config(config)
+                minimum_duration = (
+                    float(config["segment_seconds"])
+                    if config["strategy_id"] == "segmented_runs"
+                    else 35.0
+                )
+                if float(config.get("min_measured_seconds", 0)) < minimum_duration:
+                    raise ValueError(
+                        f"adversarial workload {name!r} has an invalid measured duration"
+                    )
+                if float(config.get("estimated_seconds", 0)) < float(
+                    config.get("warmup_seconds", 0)
+                ) + float(config.get("min_measured_seconds", 0)):
+                    raise ValueError(
+                        f"adversarial workload {name!r} has an invalid duration estimate"
+                    )
             continue
         benign_families.add(str(config["family"]))
         if float(config.get("warmup_seconds", -1)) < 0:
@@ -357,6 +472,15 @@ def validate_workload_registry() -> None:
         unknown = set(names) - set(WORKLOADS)
         if unknown:
             raise ValueError(f"profile {profile!r} references unknown workloads: {sorted(unknown)}")
+    for profile, names in ADVERSARIAL_PROFILES.items():
+        unknown = set(names) - set(WORKLOADS)
+        if unknown:
+            raise ValueError(f"profile {profile!r} references unknown workloads: {sorted(unknown)}")
+        families = {str(WORKLOADS[name]["family"]) for name in names}
+        if families != set(ADVERSARIAL_STRATEGIES):
+            raise ValueError(
+                f"profile {profile!r} must contain every bounded strategy exactly once"
+            )
 
 
 def list_workloads() -> dict[str, dict[str, Any]]:
@@ -379,3 +503,12 @@ def profile_workloads(profile: str) -> list[str]:
         return list(PROFILES[profile])
     except KeyError as exc:
         raise ValueError(f"unknown profile {profile!r}") from exc
+
+
+def adversarial_profile_workloads(profile: str = "adversarial_pilot") -> list[str]:
+    """Return an opt-in strategy profile; this does not authorize execution."""
+    validate_workload_registry()
+    try:
+        return list(ADVERSARIAL_PROFILES[profile])
+    except KeyError as exc:
+        raise ValueError(f"unknown adversarial profile {profile!r}") from exc

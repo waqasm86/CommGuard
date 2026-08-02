@@ -106,6 +106,11 @@ profile is opt-in and adds configuration variants plus optional peer copy. Both
 write a corpus plan before execution and report per-family coverage before any
 detector evaluation. See the [benign workload matrix](docs/benign-workload-matrix.md).
 
+Defensive adversarial strategies are not part of those profiles. They require
+an explicit human approval flag and a predeclared sealed holdout plan; no
+adversarial result is bundled. See
+[bounded adversarial research](docs/adversarial-research.md).
+
 ## Public API
 
 ```python

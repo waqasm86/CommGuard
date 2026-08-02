@@ -29,5 +29,9 @@ class CoverageError(CommGuardError):
     """Primary evaluation coverage requirements were not satisfied."""
 
 
+class ApprovalRequiredError(CommGuardError):
+    """A bounded but explicitly gated research action lacks human approval."""
+
+
 class ArtifactExistsError(CommGuardError):
     """A create-only artifact already exists."""

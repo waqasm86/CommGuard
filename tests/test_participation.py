@@ -95,3 +95,22 @@ def test_inconsistent_reported_measurement_duration_is_rejected(tmp_path) -> Non
 
     assert not valid
     assert "invalid measurement interval" in " ".join(problems)
+
+
+def test_adversarial_participation_requires_strategy_summary(tmp_path) -> None:
+    required = [
+        "startup",
+        "cuda_operation_complete",
+        "heartbeat",
+        "measurement_interval",
+        "completion",
+    ]
+    write_events(tmp_path, 0, required)
+    write_events(tmp_path, 1, required)
+
+    valid, problems, _ = validate_participation(
+        tmp_path, "inference_independent", designation="adversarial"
+    )
+
+    assert not valid
+    assert "strategy_summary" in " ".join(problems)

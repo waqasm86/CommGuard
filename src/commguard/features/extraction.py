@@ -504,7 +504,7 @@ def _extract_planned_run(
     stride_fraction: float,
     exclude_startup: bool,
     tolerance: float,
-    selected_designation: str,
+    selected_designations: tuple[str, ...],
 ) -> tuple[list[dict[str, Any]], CoverageRecord]:
     if plan.accepted_run_id is None:
         return [], _excluded_record(
@@ -515,7 +515,7 @@ def _extract_planned_run(
             CoverageReason.INCOMPLETE_RUN,
             f"corpus={corpus.corpus_id} plan={plan.plan_id} has no accepted run ID",
         )
-    if plan.designation != selected_designation:
+    if plan.designation not in selected_designations:
         reason = (
             CoverageReason.CALIBRATION_RUN_EXCLUDED
             if plan.designation == "calibration"
@@ -528,9 +528,9 @@ def _extract_planned_run(
             tolerance,
             reason,
             f"run={plan.accepted_run_id} designation={plan.designation} is not "
-            f"selected designation={selected_designation}",
+            f"selected designations={list(selected_designations)}",
         )
-    if not corpus.allows(plan.accepted_run_id, selected_designation):
+    if not corpus.allows(plan.accepted_run_id, plan.designation):
         return [], _excluded_record(
             corpus,
             plan,
@@ -824,7 +824,7 @@ def extract_feature_result(
     stride_fraction: float = 0.5,
     exclude_startup: bool = True,
     alignment_tolerance_seconds: float = 0.25,
-    selected_designation: str = "benign",
+    selected_designation: str | Sequence[str] = "benign",
 ) -> ExtractionResult:
     """Extract declared-corpus features and one coverage record per planned run."""
     corpus = _load_corpus_manifest(corpus_manifest)
@@ -835,6 +835,20 @@ def extract_feature_result(
         raise ValueError("window lengths must be unique")
     if alignment_tolerance_seconds < 0:
         raise ValueError("alignment_tolerance_seconds cannot be negative")
+    selected_designations = (
+        (selected_designation,)
+        if isinstance(selected_designation, str)
+        else tuple(str(value) for value in selected_designation)
+    )
+    if not selected_designations or len(selected_designations) != len(set(selected_designations)):
+        raise ValueError("selected designations must be non-empty and unique")
+    unknown_designations = set(selected_designations) - {
+        "benign",
+        "adversarial",
+        "calibration",
+    }
+    if unknown_designations:
+        raise ValueError(f"unknown selected designations: {sorted(unknown_designations)}")
     root = Path(input_root)
     features: list[dict[str, Any]] = []
     coverage: list[CoverageRecord] = []
@@ -847,11 +861,17 @@ def extract_feature_result(
             stride_fraction,
             exclude_startup,
             alignment_tolerance_seconds,
-            selected_designation,
+            selected_designations,
         )
         features.extend(run_features)
         coverage.append(record)
-    result = ExtractionResult(tuple(features), tuple(coverage), corpus.corpus_id, windows)
+    result = ExtractionResult(
+        tuple(features),
+        tuple(coverage),
+        corpus.corpus_id,
+        windows,
+        selected_designations=selected_designations,
+    )
     if output is not None:
         store = ArtifactStore(output)
         store.initialize()
@@ -879,7 +899,7 @@ def extract_features(
     *,
     corpus_manifest: CorpusManifest | Mapping[str, Any] | str | Path | None = None,
     alignment_tolerance_seconds: float = 0.25,
-    selected_designation: str = "benign",
+    selected_designation: str | Sequence[str] = "benign",
 ) -> list[dict[str, Any]]:
     """Backward-shaped row return with mandatory explicit corpus selection."""
     if corpus_manifest is None:

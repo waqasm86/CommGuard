@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from commguard.adversarial import AdversarialHoldoutPlan
 from commguard.artifacts import ArtifactStore
 from commguard.evaluation.splits import audit_leakage, make_split_plan
 from commguard.exceptions import CalibrationError
@@ -387,41 +388,151 @@ def _evaluate_ablation(
     return output
 
 
-def _heldout_adversarial_families(frame: Any, columns: list[str]) -> dict[str, Any]:
+def _adversarial_outcome_summary(
+    target_label: str,
+    probabilities: list[float],
+    threshold: float,
+    *,
+    run_count: int,
+) -> dict[str, Any]:
+    if target_label not in {"training", "control", "inference"}:
+        raise ValueError(f"unsupported adversarial target label {target_label!r}")
+    if not probabilities:
+        raise ValueError("adversarial outcome requires at least one detector score")
+    predictions = [int(value >= threshold) for value in probabilities]
+    target_is_training = target_label == "training"
+    expected = 1 if target_is_training else 0
+    error_rate = sum(prediction != expected for prediction in predictions) / len(predictions)
+    return {
+        "target_label": target_label,
+        "target_is_training": target_is_training,
+        "window_count": len(probabilities),
+        "run_count": run_count,
+        "detector_score_mean": statistics.fmean(probabilities),
+        "detector_score_median": statistics.median(probabilities),
+        "detector_threshold": threshold,
+        "evasion_rate": error_rate if target_is_training else None,
+        "false_negative_rate": error_rate if target_is_training else None,
+        "false_positive_rate": error_rate if not target_is_training else None,
+        "training_detection_rate": 1.0 - error_rate if target_is_training else None,
+    }
+
+
+def _partition_primary_evaluation_rows(
+    rows: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Separate benign fitting rows from adversarial scoring rows before pandas/model code."""
+    benign = [
+        row
+        for row in rows
+        if float(row.get("window_seconds", -1)) == 30.0 and row.get("designation") == "benign"
+    ]
+    adversarial = [
+        row
+        for row in rows
+        if float(row.get("window_seconds", -1)) == 30.0 and row.get("designation") == "adversarial"
+    ]
+    return benign, adversarial
+
+
+def _heldout_adversarial_families(
+    benign_frame: Any,
+    adversarial_frame: Any,
+    assignments: dict[str, str],
+    columns: list[str],
+    holdout_plan: AdversarialHoldoutPlan | None,
+    *,
+    release_final_holdout: bool,
+) -> dict[str, Any]:
+    if adversarial_frame.empty:
+        return {}
+    families = sorted(str(value) for value in adversarial_frame["workload_family"].unique())
+    if holdout_plan is None:
+        return {
+            family: {
+                "status": "blocked_missing_adversarial_holdout_plan",
+                "reason": "adversarial evidence is present but no sealed round plan was supplied",
+            }
+            for family in families
+        }
+    holdout_plan.validate()
     from sklearn.ensemble import RandomForestClassifier
     from sklearn.impute import SimpleImputer
     from sklearn.pipeline import make_pipeline
 
+    split = benign_frame["run_id"].map(assignments)
+    train = benign_frame.loc[split == "train"].copy()
+    final_identity = train.apply(
+        lambda row: holdout_plan.is_final_identity(
+            family=str(row["workload_family"]),
+            session_id=str(row["experiment_session_id"]),
+            config_id=str(row["workload_config_id"]),
+        ),
+        axis=1,
+    )
+    train = train.loc[~final_identity].copy()
+    if train.empty or train["_target"].nunique() < 2:
+        raise ValueError("frozen adversarial baseline requires both benign target classes in train")
+    selected_columns = [column for column in columns if train[column].notna().any()]
+    if not selected_columns:
+        raise ValueError("frozen adversarial baseline has no usable benign training features")
+    model = make_pipeline(
+        SimpleImputer(strategy="median"),
+        RandomForestClassifier(
+            n_estimators=300,
+            min_samples_leaf=2,
+            max_features="sqrt",
+            class_weight="balanced",
+            random_state=20260730,
+            n_jobs=-1,
+        ),
+    )
+    model.fit(train[selected_columns], train["_target"])
+    threshold = 0.5
     output: dict[str, Any] = {}
-    families = sorted(frame.loc[frame["designation"] == "adversarial", "workload_family"].unique())
     for family in families:
-        test = frame.loc[frame["workload_family"] == family]
-        train = frame.loc[frame["workload_family"] != family]
-        if test.empty or train["_target"].nunique() < 2:
-            output[str(family)] = {"status": "insufficient_data"}
+        family_frame = adversarial_frame.loc[adversarial_frame["workload_family"] == family]
+        round_names = {
+            holdout_plan.round_for(
+                family=family,
+                session_id=str(row["experiment_session_id"]),
+                config_id=str(row["workload_config_id"]),
+                release_final=release_final_holdout,
+            )
+            for _, row in family_frame.iterrows()
+        }
+        if "sealed_final_holdout" in round_names:
+            output[family] = {
+                "status": "sealed_final_holdout",
+                "window_count": len(family_frame),
+                "run_count": int(family_frame["run_id"].nunique()),
+                "detector_score": None,
+                "final_data_used_for_fitting_or_selection": False,
+            }
             continue
-        model = make_pipeline(
-            SimpleImputer(strategy="median"),
-            RandomForestClassifier(
-                n_estimators=300,
-                min_samples_leaf=2,
-                max_features="sqrt",
-                class_weight="balanced",
-                random_state=20260730,
-                n_jobs=-1,
+        target_labels = {str(value) for value in family_frame["target_label"].unique()}
+        if len(target_labels) != 1:
+            output[family] = {
+                "status": "invalid_mixed_target_family",
+                "target_labels": sorted(target_labels),
+            }
+            continue
+        probabilities = model.predict_proba(family_frame[selected_columns])[
+            :, list(model.classes_).index(1)
+        ]
+        output[family] = {
+            "status": "evaluated_frozen_benign_only_baseline",
+            "rounds": sorted(round_names),
+            "model": "random_forest_fixed_v1",
+            "fit_rows": "benign_primary_train_only",
+            "final_session_or_config_rows_used_for_fitting": False,
+            "adversarial_data_used_for_fitting_or_selection": False,
+            **_adversarial_outcome_summary(
+                next(iter(target_labels)),
+                [float(value) for value in probabilities],
+                threshold,
+                run_count=int(family_frame["run_id"].nunique()),
             ),
-        )
-        model.fit(train[columns], train["_target"])
-        prediction = model.predict(test[columns])
-        target = test["_target"].to_numpy()
-        output[str(family)] = {
-            "status": "evaluated",
-            "window_count": len(test),
-            "run_count": int(test["run_id"].nunique()),
-            "training_detection_rate": float((prediction == 1).mean()),
-            "false_negative_rate": float((prediction == 0).mean()),
-            "target_is_training": bool((target == 1).all()),
-            "training_excludes_complete_family": True,
         }
     return output
 
@@ -429,6 +540,7 @@ def _heldout_adversarial_families(frame: Any, columns: list[str]) -> dict[str, A
 def _adversarial_efficiency(root: Path) -> dict[str, Any]:
     durations: dict[str, list[float]] = defaultdict(list)
     designations: dict[str, str] = {}
+    strategy_metrics: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
     for path in sorted((root / "runs").glob("*/manifest.json")):
         manifest = json.loads(path.read_text(encoding="utf-8"))
         if manifest["exit_status"] != "completed":
@@ -438,6 +550,25 @@ def _adversarial_efficiency(root: Path) -> dict[str, Any]:
         family = str(manifest["workload_family"])
         durations[family].append((ended - started).total_seconds())
         designations[family] = str(manifest["designation"])
+        if manifest["designation"] == "adversarial":
+            rank_evidence = manifest.get("config", {}).get("rank_runtime_evidence", {})
+            for evidence in rank_evidence.values():
+                summary = evidence.get("strategy_summary", {})
+                memory = evidence.get("memory_peak", {})
+                for source_name, output_name in (
+                    ("actual_sync_rounds", "sync_rounds_per_rank"),
+                    ("communication_bytes_proxy", "communication_bytes_proxy_per_rank"),
+                    ("throughput_tokens_per_s", "throughput_tokens_per_s_per_rank"),
+                    ("final_loss_proxy", "final_loss_proxy_per_rank"),
+                ):
+                    value = summary.get(source_name)
+                    if isinstance(value, (int, float)):
+                        strategy_metrics[family][output_name].append(float(value))
+                allocated = memory.get("allocated_bytes")
+                if isinstance(allocated, int):
+                    strategy_metrics[family]["peak_allocated_bytes_per_rank"].append(
+                        float(allocated)
+                    )
     baseline_family = "ddp_training" if durations.get("ddp_training") else "ddp_full_parameter"
     baseline = durations.get(baseline_family, [])
     baseline_median = statistics.median(baseline) if baseline else None
@@ -450,6 +581,11 @@ def _adversarial_efficiency(root: Path) -> dict[str, Any]:
             "completed_run_count": len(values),
             "median_wall_duration_s": median,
             "duration_ratio_vs_baseline": median / baseline_median if baseline_median else None,
+            "measured_proxy_medians": {
+                name: statistics.median(metric_values)
+                for name, metric_values in sorted(strategy_metrics[family].items())
+                if metric_values
+            },
         }
     return {
         "baseline_family": baseline_family,
@@ -526,6 +662,8 @@ def evaluate_detector(
     negative_calibration_mode: bool = False,
     required_families: tuple[str, ...] = PRIMARY_BENIGN_FAMILIES,
     minimum_runs_per_family: int = 3,
+    adversarial_holdout_plan: AdversarialHoldoutPlan | None = None,
+    release_final_adversarial_holdout: bool = False,
 ) -> dict[str, Any]:
     """Fit transparent baselines on saved feature rows using whole-run splits."""
     root = Path(input_root)
@@ -550,10 +688,16 @@ def evaluate_detector(
     import pandas as pd
 
     rows = list(extraction.features)
+    benign_primary_rows, adversarial_primary_rows = _partition_primary_evaluation_rows(rows)
     feature_paths = sorted((root / "features").glob("features-*.jsonl"))
     frame = pd.DataFrame(rows)
     frame["_target"] = (frame["target_label"] == "training").astype(int)
-    primary_frame = frame.loc[frame["window_seconds"] == 30.0].copy()
+    primary_frame = pd.DataFrame(benign_primary_rows)
+    adversarial_frame = pd.DataFrame(adversarial_primary_rows)
+    if not primary_frame.empty:
+        primary_frame["_target"] = (primary_frame["target_label"] == "training").astype(int)
+    if not adversarial_frame.empty:
+        adversarial_frame["_target"] = (adversarial_frame["target_label"] == "training").astype(int)
     if primary_frame.empty:
         raise ValueError("primary 30-second feature frame is empty after coverage passed")
     primary_rows = primary_frame.to_dict("records")
@@ -582,8 +726,9 @@ def evaluate_detector(
         if name != "communication_only"
     }
     by_window_seconds: dict[str, Any] = {}
-    for window_seconds in sorted(frame["window_seconds"].unique()):
-        window_frame = frame.loc[frame["window_seconds"] == window_seconds]
+    benign_frame = frame.loc[frame["designation"] == "benign"]
+    for window_seconds in sorted(benign_frame["window_seconds"].unique()):
+        window_frame = benign_frame.loc[benign_frame["window_seconds"] == window_seconds]
         by_window_seconds[str(float(window_seconds))] = _evaluate_ablation(
             window_frame,
             assignments,
@@ -649,7 +794,18 @@ def evaluate_detector(
                 mode="configuration_holdout",
             ),
         },
-        "heldout_adversarial_families": _heldout_adversarial_families(frame, ablations["combined"]),
+        "adversarial_holdout_plan": (
+            adversarial_holdout_plan.to_dict() if adversarial_holdout_plan is not None else None
+        ),
+        "final_adversarial_holdout_released": release_final_adversarial_holdout,
+        "heldout_adversarial_families": _heldout_adversarial_families(
+            primary_frame,
+            adversarial_frame,
+            assignments,
+            ablations["combined"],
+            adversarial_holdout_plan,
+            release_final_holdout=release_final_adversarial_holdout,
+        ),
         "adversarial_efficiency_cost": _adversarial_efficiency(root),
         "warnings": [
             warning

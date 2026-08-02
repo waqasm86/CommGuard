@@ -122,7 +122,9 @@ Acceptance: all available CPU, lint, format, build, import, CLI, notebook, secre
 - [x] `2026-08-02T14:49:32+05:00` Phase 06 completed CPU-safe implementation: canonicalized all eight required benign family IDs; added explicit configuration IDs, a bounded 24-run standard pilot and opt-in expanded variants; wrote corpus plans before calibration/execution and separate finalized allow-lists; and made matrix summaries extract and report per-family primary coverage without detector metrics.
 - [x] `2026-08-02T14:49:32+05:00` Phase 06 acceptance: 101 CPU-safe tests passed, one optional analysis integration test skipped, and five hardware tests were deselected. CPU planning tests cover every required worker mode, deterministic unique slots, duration/T4 bounds, stable configuration identity, opt-in variation, pre-execution manifest timing, finalized membership, incomplete evidence, and canonical/legacy DDP efficiency baselines. Canonical benign/quickstart notebook cells parse, remain unexecuted, default GPU work off, and use the coverage-aware SDK matrix path. No GPU workload was executed or claimed.
 - [x] `2026-08-02T14:49:32+05:00` Phase 06 commit gate: required Ruff check and format-check passed; wheel and sdist built successfully with `.venv/bin/python -m build`; CPU import, CLI estimates, changed-notebook compilation, canonical notebook JSON/output policy, and `git diff --check` passed.
-- [ ] Execute Phase 07 and its acceptance checks.
+- [x] `2026-08-02T15:20:52+05:00` Phase 07 completed CPU-safe implementation: added a common defensive strategy contract and bounded code paths for gradient accumulation, periodic local SGD, DiLoCo-inspired sparse averaging, separately launched short segments, idle shaping, seeded randomized synchronization, mixed training/inference, and a synthetic communication decoy. Normal profiles remain disjoint and approval is checked before preflight/artifact creation.
+- [x] `2026-08-02T15:20:52+05:00` Phase 07 acceptance: 115 CPU-safe tests passed, one optional analysis integration test skipped, and five hardware tests were deselected. Tests cover bounds/identity override rejection, deterministic rank-shared schedules, scalar parameter divergence/re-agreement, real-process segment planning and restart gaps, per-rank manifest sync/proxy/throughput/loss/memory truthfulness, explicit combined designation extraction, benign-only fitting partitions, evasion versus decoy metrics, report wording, and sealed family/session/config identities. No adversarial GPU path, detector score, or final holdout was executed.
+- [x] `2026-08-02T15:20:52+05:00` Phase 07 commit gate: required Ruff check and format-check passed; wheel and sdist built successfully with `.venv/bin/python -m build`; CPU import/public API, CLI approval help, normal/adversarial profile separation, and `git diff --check` passed.
 - [ ] Execute Phase 08 and its acceptance checks.
 - [ ] Execute Phase 09 and its acceptance checks.
 - [ ] Execute Phase 10 and stop before push unless explicitly approved.
@@ -143,6 +145,9 @@ Acceptance: all available CPU, lint, format, build, import, CLI, notebook, secre
 - `2026-08-02`: Keep central protocol versioning separate from research artifact schemas. Use a standard-library, create-only offline transport as the authoritative test path; expose online HTTPS components only as operator-wrapped references with external TLS/identity/secret requirements.
 - `2026-08-02`: Use the acceptance YAML’s `control_model_or_checkpoint_load` as the canonical family ID; treat the experiment CSV’s `control_model_load` as a human-readable variant name only. Keep the standard profile benign-only with all eight required families, and move adversarial workloads to the Phase 07 opt-in workflow.
 - `2026-08-02`: Define the default benign pilot as three repetitions of eight base configurations. The expanded profile is opt-in and adds bounded configuration variants plus optional peer copy. A matrix plan is immutable evidence written before calibration, while the separately named final corpus manifest accepts completed runs only.
+- `2026-08-02`: Keep adversarial workloads outside every normal profile and require explicit approval before even preflight or artifact directory creation. Bounds and immutable strategy identity apply after user overrides. Runtime manifests must record detector score as null; only later frozen evaluation may create one.
+- `2026-08-02`: Treat segmented execution as separate torchrun subprocesses sharing a segment-group ID, not idle gaps inside one process. Preserve each short run and its explicit primary-window exclusion; never concatenate telemetry across restart gaps. Label sparse parameter averaging `DiLoCo-inspired`, never faithful DiLoCo.
+- `2026-08-02`: Freeze adversarial robustness fitting to benign primary training rows only. A declared plan separates development and hardening and seals any matching final family, session, or configuration by default; releasing the final round requires a separate explicit argument.
 
 ## Discoveries
 
@@ -159,6 +164,7 @@ Acceptance: all available CPU, lint, format, build, import, CLI, notebook, secre
 - The Phase 04 host has the development tools but not the optional analysis stack. Split and selection-policy behavior is fully CPU/dependency-free tested; fitting pandas/scikit-learn models remains unexecuted locally and must not be reported as a measured detector result.
 - Cross-node aggregation must use validated UTC timestamps because monotonic clocks are node-local. The local simulation sets `physical_multi_node_validated: false`; it cannot establish network, TLS, clock-sync, durability, or GPU-cluster behavior.
 - The pre-Phase-06 standard profile mixed benign and adversarial workloads, omitted required idle coverage, and used family names that did not match the acceptance YAML. The canonical notebooks also bypassed corpus planning and one called feature extraction without the now-required corpus argument. The registry, profiles, orchestration, and affected disabled-by-default notebook cells are now coherent; actual dual-T4 execution is still pending.
+- The prior adversarial implementation had only gradient accumulation, idle padding, and parameter-efficient DDP variants, mixed them into the standard profile, and recorded no common sync/cost/correctness contract. Its apparent “segmentation” roadmap was not code. Phase 07 replaces that profile boundary and adds bounded CPU-verifiable semantics, but CUDA/NCCL correctness and all outcome claims remain pending hardware.
 
 ## Schema migrations
 
@@ -189,6 +195,12 @@ Phase 03 extends version `2.0` with linked `feature_row`, `coverage_record`, and
 window counts, while completed v2 run manifests include an ordered, internally
 consistent measured interval. Historical v1 feature rows remain readable and
 are not assigned invented grouping IDs.
+
+Phase 07 adds backward-compatible extraction-summary designation metadata so a
+declared corpus can explicitly select benign and adversarial rows without
+relabeling either. Completed new version 2 adversarial run manifests require
+both ranks' structured strategy and peak-memory evidence; old raw artifacts are
+not rewritten and runtime detector scores remain null.
 
 ## Validation matrix
 
@@ -238,6 +250,14 @@ and expanded parameters, corpus-plan-before-calibration ordering, final accepted
 membership, and coverage-first per-family counts. The standard estimate is 24
 runs and 35 GPU-minutes at declared durations. This is a cost estimate, not a
 measured GPU result; CUDA/NCCL/NVML and peer behavior remain pending Kaggle.
+
+Phase 07 validation update: bounded strategy/profile/approval contracts,
+synchronization schedules, parameter-agreement simulation, segmented subprocess
+planning, adversarial manifest requirements, combined extraction selection,
+benign-only frozen-evaluation partitions, cost proxies, and sealed holdout
+rounds pass locally. The optional analysis stack and all GPU execution remain
+unavailable, so no evasion, false-positive, efficiency, quality, or robustness
+result is claimed.
 
 ## Recovery and idempotence
 

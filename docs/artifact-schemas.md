@@ -66,6 +66,11 @@ planned ID is used when supplied; otherwise the ID is deterministically derived
 from the family and canonical serialized configuration, so repetitions share a
 configuration identity without sharing a run identity.
 
+Extraction summaries also record the exact selected designations. Benign-only
+selection remains the default; a deliberately combined benign/adversarial
+corpus may request both without relabeling either designation. Calibration
+remains excluded unless it is separately and explicitly selected.
+
 ## Split and evaluation artifacts
 
 A split plan records the requested mode, actual strategy, deterministic seed,
@@ -88,6 +93,13 @@ Workload events retain rank-local progress and checksums. Feature rows retain
 split metadata separately from numeric features. Split assignments map a whole
 run to one split. Evaluation and calibration results record their thresholds,
 metrics, grouping unit, limitations, and source artifacts.
+
+Completed version 2 adversarial run manifests additionally require a
+`strategy_summary` and peak-memory evidence from both ranks. Expected/actual
+sync rounds must match within and across ranks; communication bytes are labeled
+as a proxy; throughput/loss/wall-time counters are finite; training strategies
+must end in parameter agreement. Detector score is null at run time and can be
+created only by a later frozen evaluation artifact.
 
 ## Central protocol messages
 

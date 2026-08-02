@@ -18,6 +18,10 @@ Status as of the local SDK build:
 - CPU-validated eight-family standard plan, explicit stable configuration IDs,
   opt-in bounded variants, pre-execution corpus manifests, finalized completed-
   run allow-lists, and per-family coverage-first summaries.
+- CPU-validated bounded metadata and synchronization semantics for eight
+  approval-gated adversarial strategies; real-process segmentation plans;
+  per-rank sync/proxy/efficiency/correctness manifest requirements; combined
+  designation-aware extraction; and sealed family/session/config holdout logic.
 - Grouped splitting, two-session holdout, baselines, signal ablations,
   per-family/run metrics, bootstrap uncertainty, abstention, held-out adversarial
   families, and duration-cost reporting.

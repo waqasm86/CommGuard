@@ -14,7 +14,26 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from commguard.adversarial import should_synchronize, synchronization_steps
 from commguard.duration import DurationController, DurationPolicy
+
+SUPPORTED_WORKER_MODES = frozenset(
+    {
+        "smoke",
+        "calibration",
+        "ddp_train",
+        "sparse_sync_training",
+        "inference_independent",
+        "inference_single_gpu",
+        "inference_synchronized",
+        "synthetic_communication_decoy",
+        "control_compute",
+        "control_host_transfer",
+        "control_model_load",
+        "control_peer_copy",
+        "control_idle",
+    }
+)
 
 
 class EventWriter:
@@ -179,6 +198,13 @@ def _run_ddp_training(
     parameter_bytes = sum(
         parameter.numel() * parameter.element_size() for parameter in model.parameters()
     )
+    strategy_id = config.get("strategy_id")
+    started = time.perf_counter()
+    sync_rounds = 0
+    training_steps = 0
+    inference_steps = 0
+    processed_tokens = 0
+    last_loss: float | None = None
     writer.emit(
         "model_ready",
         parameter_count=parameter_count,
@@ -192,6 +218,26 @@ def _run_ddp_training(
     controller = _duration_controller(config)
     step = 0
     while controller.should_continue():
+        inference_every = int(config.get("inference_every", 0))
+        if inference_every and (step + 1) % inference_every == 0:
+            tokens = torch.randint(
+                vocab_size,
+                (batch_size, sequence_length),
+                device=local_rank,
+            )
+            with torch.inference_mode(), _precision_context(torch, precision):
+                logits = model(tokens)
+            writer.emit(
+                "mixed_inference_phase",
+                step=step,
+                checksum=float(logits.float().sum()),
+            )
+            writer.emit("heartbeat", step=step, phase="inference")
+            processed_tokens += batch_size * sequence_length
+            inference_steps += 1
+            controller.complete_iteration()
+            step += 1
+            continue
         optimizer.zero_grad(set_to_none=True)
         if stagger_s:
             time.sleep(stagger_s)
@@ -230,6 +276,7 @@ def _run_ddp_training(
             torch, dist, gradient_checksum, "synchronized gradient checksum"
         )
         writer.emit("gradient_sync_complete", step=step, checksums=checksums)
+        sync_rounds += 1
         scaler.step(optimizer)
         scaler.update()
         parameter_checksum = torch.stack(
@@ -244,12 +291,208 @@ def _run_ddp_training(
             loss=total_loss,
             parameter_checksums=parameter_checksums,
         )
+        last_loss = total_loss
+        processed_tokens += batch_size * (sequence_length - 1) * gradient_accumulation
+        training_steps += 1
         writer.emit("heartbeat", step=step)
         if idle_padding_s:
             time.sleep(idle_padding_s)
         controller.complete_iteration()
         step += 1
     _emit_measurement_interval(writer, controller)
+    if strategy_id:
+        elapsed = time.perf_counter() - started
+        writer.emit(
+            "strategy_summary",
+            strategy_id=str(strategy_id),
+            expected_sync_rounds=training_steps,
+            actual_sync_rounds=sync_rounds,
+            communication_bytes_proxy=sync_rounds * parameter_bytes,
+            communication_proxy_definition="parameter_bytes_per_DDP_gradient_sync_round",
+            optimizer_steps=training_steps,
+            inference_steps=inference_steps,
+            processed_tokens=processed_tokens,
+            throughput_tokens_per_s=processed_tokens / elapsed if elapsed else None,
+            final_loss_proxy=last_loss,
+            wall_time_s=elapsed,
+            parameter_state_agreement=True,
+            detector_score=None,
+            detector_model=None,
+            detector_score_status="pending_frozen_evaluation",
+        )
+    writer.emit(
+        "memory_peak",
+        allocated_bytes=int(torch.cuda.max_memory_allocated(local_rank)),
+        reserved_bytes=int(torch.cuda.max_memory_reserved(local_rank)),
+    )
+
+
+def _average_model_parameters(torch: Any, dist: Any, model: Any) -> int:
+    synchronized_bytes = 0
+    with torch.no_grad():
+        for parameter in model.parameters():
+            dist.all_reduce(parameter.data)
+            parameter.data.div_(dist.get_world_size())
+            synchronized_bytes += parameter.numel() * parameter.element_size()
+    return synchronized_bytes
+
+
+def _run_sparse_sync_training(
+    torch: Any,
+    dist: Any,
+    writer: EventWriter,
+    config: dict[str, Any],
+    local_rank: int,
+) -> None:
+    model = _tiny_model(torch, config).cuda(local_rank)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=float(config.get("learning_rate", 1e-3)))
+    batch_size = int(config.get("batch_size", 4))
+    sequence_length = int(config.get("sequence_length", 128))
+    vocab_size = int(config.get("vocab_size", 2048))
+    precision = str(config.get("precision", "float16"))
+    loss_fn = torch.nn.CrossEntropyLoss()
+    parameter_bytes = sum(
+        parameter.numel() * parameter.element_size() for parameter in model.parameters()
+    )
+    strategy_id = str(config["strategy_id"])
+    initialization_bytes = _average_model_parameters(torch, dist, model)
+    writer.emit(
+        "initial_parameter_agreement",
+        communication_bytes_proxy=initialization_bytes,
+        included_in_measured_strategy_proxy=False,
+    )
+    writer.emit(
+        "model_ready",
+        parameter_count=sum(parameter.numel() for parameter in model.parameters()),
+        trainable_parameter_count=sum(parameter.numel() for parameter in model.parameters()),
+        parameter_bytes=parameter_bytes,
+        precision=precision,
+        sparse_synchronization=True,
+    )
+    controller = _duration_controller(config)
+    started = time.perf_counter()
+    step = 0
+    actual_sync_rounds = 0
+    communication_bytes_proxy = 0
+    processed_tokens = 0
+    last_loss: float | None = None
+    last_step_synchronized = False
+    while controller.should_continue():
+        optimizer.zero_grad(set_to_none=True)
+        tokens = torch.randint(vocab_size, (batch_size, sequence_length), device=local_rank)
+        with _precision_context(torch, precision):
+            logits = model(tokens[:, :-1])
+            loss = loss_fn(logits.reshape(-1, vocab_size), tokens[:, 1:].reshape(-1))
+        loss.backward()
+        optimizer.step()
+        step += 1
+        last_step_synchronized = should_synchronize(strategy_id, step, config)
+        if last_step_synchronized:
+            communication_bytes_proxy += _average_model_parameters(torch, dist, model)
+            actual_sync_rounds += 1
+            checksum = torch.stack(
+                [parameter.detach().float().sum() for parameter in model.parameters()]
+            ).sum()
+            checksums = _assert_equal_across_ranks(
+                torch, dist, checksum, "sparse synchronization parameter checksum"
+            )
+            writer.emit("parameter_average_complete", step=step, checksums=checksums)
+        last_loss = float(loss.detach())
+        processed_tokens += batch_size * (sequence_length - 1)
+        writer.emit("forward_complete", step=step, sparse_synchronization=True)
+        writer.emit("backward_complete", step=step, synchronized=last_step_synchronized)
+        writer.emit("heartbeat", step=step)
+        controller.complete_iteration()
+    if step and not last_step_synchronized:
+        communication_bytes_proxy += _average_model_parameters(torch, dist, model)
+        actual_sync_rounds += 1
+        checksum = torch.stack(
+            [parameter.detach().float().sum() for parameter in model.parameters()]
+        ).sum()
+        checksums = _assert_equal_across_ranks(
+            torch, dist, checksum, "final sparse synchronization parameter checksum"
+        )
+        writer.emit("parameter_average_complete", step=step, checksums=checksums, final=True)
+    elapsed = time.perf_counter() - started
+    expected_sync_rounds = len(synchronization_steps(strategy_id, step, config))
+    _emit_measurement_interval(writer, controller)
+    writer.emit(
+        "strategy_summary",
+        strategy_id=strategy_id,
+        expected_sync_rounds=expected_sync_rounds,
+        actual_sync_rounds=actual_sync_rounds,
+        communication_bytes_proxy=communication_bytes_proxy,
+        communication_proxy_definition="model_parameter_bytes_per_parameter_average_round",
+        optimizer_steps=step,
+        inference_steps=0,
+        processed_tokens=processed_tokens,
+        throughput_tokens_per_s=processed_tokens / elapsed if elapsed else None,
+        final_loss_proxy=last_loss,
+        wall_time_s=elapsed,
+        parameter_state_agreement=expected_sync_rounds == actual_sync_rounds,
+        detector_score=None,
+        detector_model=None,
+        detector_score_status="pending_frozen_evaluation",
+    )
+    writer.emit(
+        "memory_peak",
+        allocated_bytes=int(torch.cuda.max_memory_allocated(local_rank)),
+        reserved_bytes=int(torch.cuda.max_memory_reserved(local_rank)),
+    )
+
+
+def _run_synthetic_communication_decoy(
+    torch: Any,
+    dist: Any,
+    writer: EventWriter,
+    config: dict[str, Any],
+    local_rank: int,
+) -> None:
+    payload_mib = int(config["payload_mib"])
+    burst_collectives = int(config["burst_collectives"])
+    element_count = payload_mib * 1024 * 1024 // 4
+    tensor = torch.full((element_count,), float(writer.rank + 1), device=local_rank)
+    tensor_bytes = tensor.numel() * tensor.element_size()
+    controller = _duration_controller(config)
+    started = time.perf_counter()
+    steps = 0
+    collectives = 0
+    while controller.should_continue():
+        for _ in range(burst_collectives):
+            dist.all_reduce(tensor)
+            tensor.div_(dist.get_world_size())
+            collectives += 1
+        steps += 1
+        writer.emit(
+            "decoy_burst_complete",
+            step=steps,
+            collective_count=burst_collectives,
+            tensor_bytes=tensor_bytes,
+            checksum=float(tensor[0]),
+        )
+        writer.emit("heartbeat", step=steps)
+        time.sleep(float(config.get("burst_interval_s", 0.5)))
+        controller.complete_iteration()
+    elapsed = time.perf_counter() - started
+    _emit_measurement_interval(writer, controller)
+    writer.emit(
+        "strategy_summary",
+        strategy_id=str(config["strategy_id"]),
+        expected_sync_rounds=steps * burst_collectives,
+        actual_sync_rounds=collectives,
+        communication_bytes_proxy=collectives * tensor_bytes,
+        communication_proxy_definition="input_tensor_bytes_per_all_reduce_call",
+        optimizer_steps=0,
+        inference_steps=0,
+        processed_tokens=0,
+        throughput_tokens_per_s=None,
+        final_loss_proxy=None,
+        wall_time_s=elapsed,
+        parameter_state_agreement=None,
+        detector_score=None,
+        detector_model=None,
+        detector_score_status="pending_frozen_evaluation",
+    )
     writer.emit(
         "memory_peak",
         allocated_bytes=int(torch.cuda.max_memory_allocated(local_rank)),
@@ -601,6 +844,8 @@ def main() -> int:
             raise RuntimeError("initial participation reduction failed")
         writer.emit("cuda_operation_complete", checksum=int(evidence.item()))
         mode = str(config["mode"])
+        if mode not in SUPPORTED_WORKER_MODES:
+            raise ValueError(f"unknown mode {mode!r}")
         if config.get("inject_rank_crash") == rank:
             raise RuntimeError("injected rank crash")
         if config.get("inject_timeout_rank") == rank:
@@ -611,16 +856,20 @@ def main() -> int:
             _run_calibration(torch, dist, writer, config, local_rank)
         elif mode == "ddp_train":
             _run_ddp_training(torch, dist, writer, config, local_rank)
+        elif mode == "sparse_sync_training":
+            _run_sparse_sync_training(torch, dist, writer, config, local_rank)
         elif mode == "inference_independent":
             _run_inference(torch, dist, writer, config, local_rank, synchronized=False)
         elif mode == "inference_single_gpu":
             _run_single_gpu_inference(torch, dist, writer, config, local_rank)
         elif mode == "inference_synchronized":
             _run_inference(torch, dist, writer, config, local_rank, synchronized=True)
+        elif mode == "synthetic_communication_decoy":
+            _run_synthetic_communication_decoy(torch, dist, writer, config, local_rank)
         elif mode.startswith("control_"):
             _run_control(torch, dist, writer, config, local_rank, mode.removeprefix("control_"))
         else:
-            raise ValueError(f"unknown mode {mode!r}")
+            raise AssertionError(f"supported mode {mode!r} has no dispatch path")
         dist.barrier()
         writer.emit("completion", healthy=True)
         return 0

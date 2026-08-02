@@ -13,6 +13,17 @@ NON_AFFILIATION = (
 )
 
 
+def _adversarial_result_text(family: str, result: dict[str, Any]) -> str:
+    status = str(result.get("status", "unavailable"))
+    if status == "evaluated_frozen_benign_only_baseline":
+        if result.get("target_is_training"):
+            return f"{family}: evasion rate {result.get('evasion_rate')}"
+        return f"{family}: false-positive rate {result.get('false_positive_rate')}"
+    if status == "sealed_final_holdout":
+        return f"{family}: sealed final holdout (not scored)"
+    return f"{family}: {status.replace('_', ' ')}"
+
+
 def _latest_json(directory: Path, pattern: str) -> dict[str, Any] | None:
     paths = sorted(directory.glob(pattern))
     if not paths:
@@ -147,11 +158,7 @@ def generate_report(
         lines.append(
             "**Observed:** Complete-strategy holdouts: "
             + "; ".join(
-                (
-                    f"{family}: detection {result.get('training_detection_rate', 'unmeasured')}"
-                    if result.get("status") == "evaluated"
-                    else f"{family}: insufficient data"
-                )
+                _adversarial_result_text(family, result)
                 for family, result in evaluation["heldout_adversarial_families"].items()
             )
             + "."
