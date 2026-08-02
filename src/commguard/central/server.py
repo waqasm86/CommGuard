@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import statistics
 import uuid
 from collections import defaultdict
@@ -19,6 +20,7 @@ from commguard.central.schemas import (
 )
 from commguard.central.security import (
     MAX_PAYLOAD_BYTES,
+    canonical_bytes,
     validate_payload_size,
     validate_telemetry_samples,
     verify_message,
@@ -81,6 +83,7 @@ class CentralIngestionService:
         self.last_batch_by_agent: dict[str, str] = {}
         self.last_seen_by_node: dict[str, datetime] = {}
         self.seen_message_ids: set[str] = set()
+        self.accepted_message_digests: dict[str, str] = {}
         self.accepted_samples_by_node: dict[str, list[tuple[str, dict[str, Any]]]] = defaultdict(
             list
         )
@@ -168,12 +171,23 @@ class CentralIngestionService:
         except (TypeError, ValueError) as exc:
             return self._ack(message_id, False, self._reason(exc), str(exc), agent_id)
 
+        authenticated_digest = hashlib.sha256(
+            canonical_bytes(payload, include_signature=True)
+        ).hexdigest()
         if message_id in self.seen_message_ids:
+            if self.accepted_message_digests.get(message_id) == authenticated_digest:
+                return self._ack(
+                    message_id,
+                    True,
+                    "already_accepted",
+                    "identical authenticated message was already accepted",
+                    agent_id,
+                )
             return self._ack(
                 message_id,
                 False,
-                "replay",
-                "message ID was already accepted",
+                "message_id_conflict",
+                "message ID was reused with different authenticated content",
                 agent_id,
             )
         previous_sequence = self.last_sequence_by_agent.get(agent_id)
@@ -241,6 +255,7 @@ class CentralIngestionService:
         self.last_sequence_by_agent[agent_id] = message.sequence
         self.last_seen_by_node[message.node_id] = now
         self.seen_message_ids.add(message_id)
+        self.accepted_message_digests[message_id] = authenticated_digest
         return self._ack(message_id, True, "accepted", "message accepted", agent_id)
 
     def node_health(self) -> dict[str, dict[str, Any]]:

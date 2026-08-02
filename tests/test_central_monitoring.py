@@ -139,13 +139,23 @@ def test_two_agent_offline_ingestion_aggregation_and_decision(tmp_path) -> None:
         assert prohibited not in serialized_requests
 
 
-def test_replay_stale_sequence_invalid_signature_and_chain_are_rejected(tmp_path) -> None:
+def test_idempotent_retry_stale_sequence_invalid_signature_and_chain(tmp_path) -> None:
     _, service, agents = setup_two_agents(tmp_path)
     batch_id = agents["agent-a"].collect_once()
     assert agents["agent-a"].flush()[0].accepted
     original = request_payload(tmp_path, batch_id)
 
-    assert service.ingest(original).reason_code == "replay"
+    duplicate = service.ingest(original)
+    assert duplicate.accepted is True
+    assert duplicate.reason_code == "already_accepted"
+    assert len(service.accepted_samples_by_node["node-a"]) == 2
+
+    conflict = copy.deepcopy(original)
+    conflict["samples"][0]["fields"]["power_draw_w"]["value"] += 1
+    resign(conflict, b"secret-a")
+    conflict_ack = service.ingest(conflict)
+    assert conflict_ack.accepted is False
+    assert conflict_ack.reason_code == "message_id_conflict"
     stale = copy.deepcopy(original)
     stale["batch_id"] = "batch-stale-sequence"
     resign(stale, b"secret-a")
@@ -274,3 +284,51 @@ def test_agent_retains_buffer_when_transport_fails() -> None:
     assert len(agent.pending) == 1
     assert agent.flush()[0].accepted
     assert agent.pending == []
+
+
+def test_lost_ack_retry_is_idempotent_and_clears_agent_queue() -> None:
+    clock = FakeClock()
+    service = CentralIngestionService(
+        {"agent-a": AgentRegistration("agent-a", "node-a", b"secret-a")},
+        experiment_session_id="session-central",
+        expected_nodes=("node-a",),
+        clock=clock,
+    )
+
+    class AckLosingTransport:
+        def __init__(self) -> None:
+            self.drop_first_ack = True
+
+        def send(self, message):
+            acknowledgment = service.ingest(message)
+            if self.drop_first_ack:
+                self.drop_first_ack = False
+                assert acknowledgment.accepted is True
+                raise OSError("acknowledgment lost after server acceptance")
+            return acknowledgment
+
+    agent = NodeAgent(
+        agent_id="agent-a",
+        node_id="node-a",
+        experiment_session_id="session-central",
+        hmac_secret=b"secret-a",
+        backend=FakeBackend(clock, 0),
+        transport=AckLosingTransport(),
+        clock=clock,
+        monotonic_ns=lambda: 1,
+    )
+    batch_id = agent.collect_once()
+
+    with pytest.raises(OSError, match="acknowledgment lost"):
+        agent.flush()
+    assert len(agent.pending) == 1
+    assert len(service.accepted_samples_by_node["node-a"]) == 2
+
+    acknowledgments = agent.flush()
+
+    assert [(ack.accepted, ack.reason_code) for ack in acknowledgments] == [
+        (True, "already_accepted")
+    ]
+    assert agent.pending == []
+    assert agent.last_batch_id == batch_id
+    assert len(service.accepted_samples_by_node["node-a"]) == 2

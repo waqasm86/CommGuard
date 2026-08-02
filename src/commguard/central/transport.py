@@ -32,6 +32,16 @@ def _exclusive_json(path: Path, payload: dict[str, Any]) -> None:
         os.fsync(stream.fileno())
 
 
+def _existing_json_matches(path: Path, payload: dict[str, Any]) -> bool:
+    if not path.is_file():
+        return False
+    existing = json.loads(path.read_text(encoding="utf-8"))
+    return canonical_bytes(existing, include_signature=True) == canonical_bytes(
+        payload,
+        include_signature=True,
+    )
+
+
 class OfflineFileTransport:
     """Create-only request/ack log around an in-process central service."""
 
@@ -41,12 +51,17 @@ class OfflineFileTransport:
 
     def send(self, message: dict[str, Any]) -> IngestionAck:
         identifier = _message_id(message)
-        _exclusive_json(self.root / "requests" / f"{identifier}.json", message)
+        request_path = self.root / "requests" / f"{identifier}.json"
+        if request_path.exists() and not _existing_json_matches(request_path, message):
+            raise ValueError("offline request message ID conflicts with saved content")
+        if not request_path.exists():
+            _exclusive_json(request_path, message)
         acknowledgment = self.service.ingest(message)
-        _exclusive_json(
-            self.root / "acknowledgments" / f"{identifier}.json",
-            acknowledgment.to_dict(),
-        )
+        acknowledgment_path = self.root / "acknowledgments" / f"{identifier}.json"
+        if acknowledgment_path.exists():
+            existing = json.loads(acknowledgment_path.read_text(encoding="utf-8"))
+            return IngestionAck(**existing)
+        _exclusive_json(acknowledgment_path, acknowledgment.to_dict())
         return acknowledgment
 
 

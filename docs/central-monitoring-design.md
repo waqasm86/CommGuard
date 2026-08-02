@@ -19,7 +19,10 @@ pending queue make transport failures retryable without dropping the batch.
 version, registered agent/node binding, HMAC, experiment session, exact schema,
 privacy allow-list, unique message ID, strictly increasing sequence, clock skew,
 and previous-batch linkage. Only accepted telemetry enters in-memory reference
-state. Heartbeats update node liveness without adding telemetry.
+state. An exact authenticated retry of an already accepted envelope receives an
+idempotent `already_accepted` acknowledgment and does not ingest samples again;
+reuse of that message ID with different authenticated content is rejected as a
+conflict. Heartbeats update node liveness without adding telemetry.
 
 Aggregation selects samples by UTC window because monotonic clocks are only
 node-local. It reports per-node sample counts, field means, health, missing or
@@ -31,7 +34,8 @@ stale nodes force abstention before the scorer is called.
 ## Security and privacy controls
 
 - HMAC-SHA256 uses canonical JSON and a distinct configured secret per agent.
-- Accepted sequences are strictly increasing; accepted IDs cannot be replayed.
+- Accepted sequences are strictly increasing. Exact acknowledgment-loss retries
+  are idempotent; changed content under an accepted ID is rejected.
 - Batch chaining detects gaps or out-of-order parents.
 - UTC message/sample skew, node staleness, and payload size are bounded.
 - Only GPU/sample identity, timing, and the nine declared telemetry readings are
@@ -57,9 +61,10 @@ controls is not a supported production configuration.
 ## Local evidence boundary
 
 CPU tests simulate two agents, aggregation, a decision, replay, stale sequence,
-bad HMAC, bad batch chaining, oversized payload, unknown protocol, prohibited
-fields, clock skew, buffered transport failure, and node loss. They do not
-exercise sockets, TLS, multiple hosts, GPUs, or real detector models.
+acknowledgment loss with exact retry, conflicting ID reuse, bad HMAC, bad batch
+chaining, oversized payload, unknown protocol, prohibited fields, clock skew,
+buffered transport failure, and node loss. They do not exercise sockets, TLS,
+multiple hosts, GPUs, or real detector models.
 
 Before a physical pilot, an operator must specify node/workload identity,
 secret provisioning and rotation, TLS termination and peer verification,

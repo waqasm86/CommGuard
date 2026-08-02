@@ -4,6 +4,8 @@
 
 - Require idle-aware three-repetition calibration at 1/4/16/64 MiB for new
   evidence, and bind benign/evaluation artifacts to one hash-verified calibration.
+- Make exact authenticated central-ingestion retries idempotent after lost
+  acknowledgments while rejecting changed content under a reused message ID.
 - Add explicit session/collection/corpus/node provenance, schema-2 legacy
   migration, declared corpus membership, per-plan coverage, timestamp-aligned
   features, duration evidence, and strict 30-second primary gates.
