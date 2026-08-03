@@ -1,5 +1,10 @@
 # Next Kaggle experiments
 
+Start with `commguard_calibration_v3.ipynb` in smoke mode, then use a fresh
+workspace in full mode. Full calibration plans 30 runs: five idle repetitions
+and five repetitions for each 1, 4, 16, 64, and 128 MiB payload. The first
+expected archive is `commguard-calibration-prototype-<timestamp>.tar.gz`.
+
 CommGuard has historical dual-T4 calibration and a short benign pilot, but the
 derived evidence is DDP versus idle only and does not pass the current primary
 coverage policy. See [`current-results.md`](current-results.md). The completion
@@ -14,13 +19,15 @@ directory after inserting the final pushed commit below.
 
 Run the notebooks in this order on a Kaggle `GPU T4 x2` accelerator:
 
-1. `commguard_calibration_v3.ipynb` measures three idle repetitions and three
-   collective repetitions at 1, 4, 16, and 64 MiB, then exports the calibration
-   evidence bundle and its exact artifact hash/reference.
+1. `commguard_calibration_v3.ipynb` measures five idle repetitions and five
+   collective repetitions at 1, 4, 16, 64, and 128 MiB for each selected
+   standard sampling interval, then exports the calibration evidence bundle
+   and its exact artifact hash/reference.
 2. `commguard_benign_corpus_v2.ipynb` restores that hash-verified prior-session
    bundle, runs a fresh current-session calibration as the actual gate, records
    both roles without interchanging them, runs a smoke pilot by default, and
-   exposes the full 24-run standard corpus as an explicit opt-in.
+   exposes the full 24-run standard corpus as an explicit opt-in. Calibration
+   idle runs are never reused as corpus idle runs.
 3. `commguard_detector_evaluation_v2.ipynb` restores the combined bundle and runs
    grouped feature evaluation only after the required corpus is present.
 4. `commguard_adversarial_redteam_v1.ipynb` requires a passing benign evaluation
@@ -34,12 +41,12 @@ under `/kaggle/input`, copy its SHA-256 into `EXPECTED_INPUT_SHA256`, and restor
 it into the notebook's fresh working directory. Never delete or replace the
 read-only `/kaggle/input` source.
 
-The calibration decision can be `supported`, `partially_supported`, or
-`not_supported`. A partial result limits subsequent analysis to the explicitly
-reported reliable payload groups; it is not evidence that CommGuard detects
-training. Do not claim training detection unless the third notebook produces a
-non-empty evaluation artifact after the eight-family, three-run, 30-second
-coverage gate.
+The calibration result can be `supported`, `partially_supported`,
+`inconclusive`, `not_supported`, or `failed`. A partial result limits subsequent
+analysis to the explicitly reported reliable payload groups; it is not evidence
+that CommGuard detects training. Do not claim training detection unless the
+third notebook produces a non-empty evaluation artifact after the eight-family,
+three-run, 30-second coverage gate.
 
 For the rerun, use a fresh Kaggle copy, insert the final remote-visible
 40-character patch commit, select `GPU T4 x2`, and run the calibration notebook

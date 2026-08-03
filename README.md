@@ -18,6 +18,12 @@ workload classifiers.
 
 ## Scope
 
+> **CommGuard’s Kaggle workflow is a single-node, dual-NVIDIA-T4 research
+> prototype. It validates experimental methodology and software behavior on
+> two local GPU ranks. It does not establish generalization to two physical
+> 8-GPU nodes, NVLink/NVSwitch fabrics, RoCE or InfiniBand networks, large
+> frontier-model workloads, or production treaty-verification deployments.**
+
 CommGuard is designed to answer a limited empirical question: whether short
 windows of signals available in one dual-T4 Kaggle session distinguish the
 included PyTorch DDP training workloads from included benign inference and
@@ -74,25 +80,30 @@ For the reproducible dual-T4 study, enable Kaggle Internet access, choose
 3. [`commguard_detector_evaluation_v2.ipynb`](notebooks/commguard_detector_evaluation_v2.ipynb)
 4. [`commguard_adversarial_redteam_v1.ipynb`](notebooks/commguard_adversarial_redteam_v1.ipynb)
 
-Each notebook requires a reviewed 40-character commit that is present on an
-origin remote ref. It fetches that object, checks out detached HEAD, and rejects
-a dirty or unpushed checkout. Downstream notebooks also require the exact
-SHA-256 printed by their predecessor before safely restoring its archive.
+Each notebook installs, in order of preference, one checksum-pinned wheel, one
+checksum-pinned source archive, or a public 40-character Git commit. Editable
+source is restricted to explicitly labeled development smoke tests. Downstream
+notebooks require the exact SHA-256 printed by their predecessor.
 
-The calibration notebook records three idle repetitions and three AllReduce
-repetitions at 1, 4, 16, and 64 MiB. In the benign notebook, that restored
+The full calibration notebook records five idle repetitions and five AllReduce
+repetitions at 1, 4, 16, 64, and 128 MiB at the selected interval. A bounded
+idle collector study compares jitter and sampler duty at 1.0, 0.5, and 0.2
+seconds. Smoke mode is explicitly ineligible for scientific
+acceptance. In the benign notebook, the restored
 calibration is explicitly prior-session input evidence; a fresh current-session
 calibration is the actual collection gate. Corpus, extraction, evaluation, and
 reporting paths verify the exact current calibration path, hash, session,
 environment, source commit, schema, and status rather than selecting a filename.
 
-Calibration can be `supported`, `partially_supported`, or `not_supported`.
+Calibration distinguishes `supported`, `partially_supported`, `inconclusive`,
+`not_supported`, and `failed` result states while retaining compatibility with
+older three-state artifacts.
 Historical schema-1 support is reported only under its legacy contract and is
 not treated as a pass of the new idle-aware gate.
 Between Kaggle sessions, download each notebook's exported evidence archive and
 upload it as a private Kaggle Dataset for the next notebook. See the
-[experiment roadmap](docs/NEXT_KAGGLE_EXPERIMENTS.md) for the artifact flow and
-claim boundary.
+[Kaggle prototype runbook](docs/KAGGLE_PROTOTYPE_RUNBOOK.md) for exact steps and
+the [experiment roadmap](docs/NEXT_KAGGLE_EXPERIMENTS.md) for the claim boundary.
 
 ## Local checkout
 
@@ -112,6 +123,9 @@ commguard run --profile standard --repetitions 3 --output artifacts
 # Inspect the matrix summary and continue only if primary_coverage_gate.passed is true.
 commguard evaluate --input artifacts --output artifacts --minimum-runs-per-family 3
 commguard report --input artifacts --output artifacts/report.md
+commguard corpus plan --profile standard --repetitions 3
+commguard verify-artifact evidence.tar.gz --sha256 <64-hex-digest>
+commguard build-review-bundle --input artifacts --output /tmp/commguard-review.tar.gz
 ```
 
 The standard and extended experiment profiles are calibration-gated. They stop
@@ -156,10 +170,12 @@ See `docs/` for architecture, artifact contracts, methodology, safety, and
 reproducibility details:
 
 - [Kaggle dual-T4 instructions](docs/kaggle-dual-t4.md)
+- [Kaggle prototype runbook](docs/KAGGLE_PROTOTYPE_RUNBOOK.md)
 - [Next Kaggle experiments](docs/NEXT_KAGGLE_EXPERIMENTS.md)
 - [Evidence index](docs/evidence-index.md)
 - [Current results and coverage failure](docs/current-results.md)
 - [Research report template](reports/research-report-template.md)
+- [Kaggle prototype report](reports/commguard-kaggle-prototype-report.md)
 - [Artifact contracts](docs/artifacts.md)
 - [Methodology](docs/methodology.md)
 - [Canonical versus executed notebooks](docs/notebook-policy.md)

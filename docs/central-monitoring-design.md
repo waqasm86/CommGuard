@@ -1,5 +1,16 @@
 # Central monitoring reference design
 
+The Kaggle reference path models two rank/GPU agents on the **same physical
+node**. Agent sequence state and health are independent, so loss or staleness of
+either rank makes a window incomplete and forces detector abstention. Raw
+events and aggregate windows remain local. This is not evidence of a physical
+two-node deployment.
+
+Future deployment requires one agent per physical node, authenticated secure
+transport, key lifecycle, clock synchronization, persistent storage, NIC/RDMA
+counters, NVLink/NVSwitch counters, RoCE/InfiniBand monitoring, and central
+policy enforcement.
+
 ## Status
 
 This central server is a CPU-tested local reference implementation. It has not been deployed or

@@ -204,7 +204,17 @@ test/lint/format/build gate. No history rewrite or force-push is allowed.
   diagnostic source, and restored deterministic generation. The checkpoint
   gate passed with 170 CPU-safe tests, one optional-analysis skip, six hardware
   deselections, Ruff check/format, build, delivery scan, and evidence hashes.
-- [ ] Complete remaining requirement-gap audit and implementation.
-- [ ] Complete implementation and notebook migration.
-- [ ] Complete documentation and delivery materials.
+- [x] `2026-08-04` Completed the requirement-gap audit and SDK implementation:
+  shared scope metadata, current telemetry fields and unit conversion metadata,
+  duration/cadence-aware five-state calibration, exact-match corpus resume,
+  complete-run feature sets, grouped binary/secondary multiclass evaluation,
+  GroupKFold/LeaveOneGroupOut plans, periodic-sync tradeoffs, two same-node
+  collector agents, verified deterministic archive export, and focused tests.
+- [x] `2026-08-04` Regenerated all four policy-v3 canonical notebooks with
+  package-source priority, dirty-source smoke enforcement, smoke/full modes,
+  strict two-T4 gates, machine run status, stage materializers, and verified
+  prototype archive names. Static notebook compilation and delivery scans pass.
+- [x] `2026-08-04` Added the Kaggle runbook, research report skeleton, scope and
+  evidence reconciliation, workload labels, handoff, and draft PR text without
+  adding empirical claims.
 - [ ] Complete final validation, commits, push, and draft PR.

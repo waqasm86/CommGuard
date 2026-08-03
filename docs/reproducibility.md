@@ -1,9 +1,16 @@
 # Reproducibility
 
+Canonical notebooks record installation source, exact wheel/archive SHA-256 or
+public Git commit, CommGuard version, Python, PyTorch, CUDA, NCCL when
+discoverable, driver/GPU inventory, focused package snapshot, notebook SHA-256,
+configuration hash, dirty state, session/corpus IDs, scope metadata, run status,
+and stage checksums. Accepted export refuses dirty source; editable source is
+development-smoke-only.
+
 1. Use the canonical sequence in
    [`NEXT_KAGGLE_EXPERIMENTS.md`](NEXT_KAGGLE_EXPERIMENTS.md) with Kaggle's
    `GPU T4 x2` accelerator.
-2. Set `REVIEWED_COMMIT` to a 40-character commit present on an origin remote
+2. Set `PINNED_PUBLIC_COMMIT` to a 40-character commit present on an origin remote
    ref. The notebook fetches that object, uses detached HEAD, and refuses dirty
    or remote-unreachable source.
 3. Install with `--no-build-isolation --no-deps`; never update Kaggle's

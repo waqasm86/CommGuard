@@ -1,5 +1,14 @@
 # Limitations
 
+> **CommGuard’s Kaggle workflow is a single-node, dual-NVIDIA-T4 research
+> prototype. It validates experimental methodology and software behavior on
+> two local GPU ranks. It does not establish generalization to two physical
+> 8-GPU nodes, NVLink/NVSwitch fabrics, RoCE or InfiniBand networks, large
+> frontier-model workloads, or production treaty-verification deployments.**
+
+NVML PCIe polling can alias short bursts and is not a direct NCCL byte counter.
+The optional 0.1-second diagnostic may add overhead and is not the default.
+
 Local CPU tests validate schemas, storage behavior, feature extraction, grouped
 splits, CLI construction, capability errors, and participation evidence parsing.
 They do not validate CUDA execution, NVML field availability, NCCL collectives,

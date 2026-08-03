@@ -1,5 +1,13 @@
 # Evidence index
 
+## Prospective prototype packages
+
+The new canonical workflow will create calibration, benign-corpus, detector,
+and adversarial archives named `commguard-*-prototype-<timestamp>.tar.gz` with
+sibling checksums. None is indexed as executed or accepted yet. After Kaggle
+execution, add exact archive size, SHA-256, source identity, session ID, and
+acceptance state here before using a result in README or reports.
+
 This index is the claim boundary for CommGuard's current empirical results. Raw
 archives and executed notebooks are ignored local evidence and are not committed
 or rewritten. The pre-completion inventory informed this index, but its private

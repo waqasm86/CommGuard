@@ -124,11 +124,11 @@ the idle-aware gate. Legacy compatibility is confined to schema 1.
 
 New calibration trees contain create-only `calibration_sweep_started` and
 `calibration_sweep_completed` experiment summaries keyed by the exact session
-and collection. The start marker declares the expected 15-run matrix; the
+and collection. The start marker declares the expected 30-run matrix; the
 completion marker binds its result path and SHA-256. A start marker without a
 completion marker is preserved partial evidence, never permission to append or
 restart the sweep in place. The clean-standard validator checks unique run IDs,
-three idle observations, three observations at each 1/4/16/64 MiB payload,
+five idle observations, five observations at each 1/4/16/64/128 MiB payload,
 payload-accurate names and manifests, idle event streams without measured
 collectives, and the exact calibration JSON hash reference.
 

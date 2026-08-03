@@ -1,5 +1,11 @@
 # Notebook source and evidence policy
 
+Policy version `commguard-notebook-policy-v3` requires exactly four canonical
+notebooks in registered order plus the separated v4 diagnostic. Canonical code
+cells are output-free, parameter-tagged, use installed SDK APIs, provide smoke
+and full gates where hardware is collected, record final `run_status.json`, and
+export non-destructive deterministic archives with sibling SHA-256 files.
+
 CommGuard separates canonical notebook source from executed evidence.
 
 ## Canonical source
@@ -30,20 +36,20 @@ dirty or not visible from a remote ref. Each downstream notebook also requires
 the exact SHA-256 printed by its predecessor and restores the archive through
 the SDK's create-only, traversal/link-rejecting loader.
 
-The committed `REVIEWED_COMMIT` value remains an explicit placeholder until the
-reviewed feature branch is pushed. Calibration uses three idle repetitions plus
-three repetitions at 1, 4, 16, and 64 MiB. The benign notebook records the
-restored calibration as prior-session evidence and binds its corpus to a fresh
-current-session calibration. Later notebooks consume the exact matrix,
-extraction, calibration, and evaluation paths printed by their predecessor;
-they never choose a calibration by filename order.
+The committed `PINNED_PUBLIC_COMMIT` value remains an explicit placeholder until
+the reviewed feature branch is pushed. Full calibration uses five idle
+repetitions plus five repetitions at 1, 4, 16, 64, and 128 MiB at the selected
+sampling interval; a bounded idle collector comparison covers the three standard
+intervals. The benign notebook consumes the exact accepted calibration
+archive and binds the corpus to that provenance. Later notebooks consume the
+exact matrix, extraction, calibration, and evaluation paths printed by their
+predecessor; they never choose a calibration by filename order.
 
-After the editable install, every canonical notebook prepends the reviewed
-checkout's `src/` directory to both `sys.path` and `PYTHONPATH`, invalidates
-import caches, removes stale `commguard` modules, and verifies
-`commguard.__file__` is under that checkout. This is required because an
-already-running Kaggle kernel need not observe an editable install immediately;
-`PYTHONPATH` also binds spawned `torchrun` workers to the same source.
+After installation, every canonical notebook invalidates import caches, removes
+stale `commguard` modules, reimports the installed package, and records the
+resolved import path. Pinned Git installation uses a detached remote-visible
+checkout; editable installation is restricted to explicitly dirty development
+smoke mode and can never export accepted evidence.
 
 Calibration creates one unique artifact directory per `NOTEBOOK_RUN_ID` before
 strict preflight and refuses directory reuse. The SDK then writes create-only
@@ -75,14 +81,10 @@ state inventory and the evidence index.
 
 ## Naming transitions
 
-`commguard_dual_t4_research.ipynb` is a byte-identical rename of the deleted
-`commguard_william_fowler_dual_t4_research.ipynb`; the shorter name avoids
-personal naming in a canonical path. The deleted name remains visible in Git
-history and its hash is recorded in the baseline inventory.
-
-The research-completion series supersedes the earlier staged sources with the
-versioned canonical sequence above. The older underscore-named notebooks stay
-in Git as historical source files but are no longer in the canonical inventory.
-They are not result evidence and are not inputs to the current sequence.
+The research-completion series supersedes earlier staged sources with the
+versioned canonical sequence above. Superseded source notebooks were removed
+from the active directory only after confirming their Git-history provenance
+and preserved historical executed evidence. They remain recoverable from Git
+history but are not result evidence or inputs to the current sequence.
 
 Superseding a canonical source never deletes executed evidence.

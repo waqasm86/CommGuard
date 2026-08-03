@@ -3,16 +3,16 @@
 CommGuard’s default `standard` profile is a bounded dual-T4 pilot. It contains
 three repetitions by default of each required family:
 
-| Family ID | Worker path | Pilot configuration |
-|---|---|---|
-| `ddp_training` | two-rank DDP training | AMP, batch 4, sequence 128 |
-| `inference_prefill_independent` | independent inference per GPU | batch 4, sequence 128 |
-| `inference_decode_independent` | independent decode-like inference | batch 1, context 128 |
-| `inference_synchronized` | inference with bounded barriers | every iteration |
-| `control_compute` | independent matrix multiplication | 2048-square matrices |
-| `control_host_transfer` | pinned host/device/host copies | 64 MiB payload |
-| `control_model_or_checkpoint_load` | CPU state load plus device placement | tiny model state |
-| `control_idle` | timed heartbeat control | no GPU operation |
+| Family ID | Worker path | Scientific label | Pilot configuration |
+|---|---|---|---|
+| `ddp_training` | two-rank DDP training | real implementation | AMP, batch 4, sequence 128 |
+| `inference_prefill_independent` | independent inference per GPU | real implementation | batch 4, sequence 128 |
+| `inference_decode_independent` | independent decode-like inference | controlled proxy | batch 1, context 128 |
+| `inference_synchronized` | inference with bounded barriers | controlled proxy | every iteration |
+| `control_compute` | independent matrix multiplication | synthetic control | 2048-square matrices |
+| `control_host_transfer` | pinned host/device/host copies | synthetic control | 64 MiB payload |
+| `control_model_or_checkpoint_load` | CPU state load plus device placement | synthetic control | tiny model state |
+| `control_idle` | timed heartbeat control | synthetic control | no GPU operation |
 
 Every non-optional benign configuration declares a five-second warmup and at
 least 35 measured seconds. The extra margin protects the 30-second primary

@@ -1,5 +1,7 @@
 # Suggested pull request
 
+> Superseded by `delivery/KAGGLE_PROTOTYPE_PR_BODY.md` for the current branch.
+
 Suggested title:
 
 > Fix calibration-v3 idle dispatch and Kaggle evidence workflow
@@ -10,14 +12,14 @@ Suggested title:
   participation, and measured-interval evidence but no measured collective;
 - make preflight prepare safe output directories;
 - use truthful payload-specific calibration identities, refuse repeated sweeps,
-  and validate the exact 15-run standard matrix;
+  and validate the exact 30-run standard matrix;
 - make archive export non-destructive and atomic by default;
 - harden and regenerate the canonical Kaggle notebooks with exact source/import,
   T4, workspace, provenance, progress, validation, and export checks;
 - repair repository/notebook policy without deleting historical user evidence;
 - remove tracked local state, scan every tracked public text file for personal
   paths, and ignore future `.agent/state/` captures;
-- require three-repetition idle-aware calibration at 1/4/16/64 MiB and bind
+- require five-repetition idle-aware calibration at 1/4/16/64/128 MiB and bind
   downstream artifacts to one exact hash-verified calibration;
 - add explicit session, collection, corpus, run, node, source, and input provenance;
 - require declared corpus membership, one coverage record per planned run, and

@@ -1,5 +1,12 @@
 # Bounded adversarial research
 
+The canonical first study is periodic synchronization/local-update training at
+`k = 1, 2, 4, 8, 16`. It records actual synchronization rounds, finite loss,
+rank state, throughput, parameter agreement, communication proxy, frozen
+detector score/prediction/abstention, and utility cost. Adversarial rows do not
+fit or select the detector. All work remains bounded to the local Kaggle process
+group and is not a production evasion tool.
+
 CommGuard’s adversarial workloads are controlled defensive tests of detector
 failure modes. They do not alter telemetry, evade provider controls, inspect
 model or dataset content, or target a third-party monitoring system. Every
