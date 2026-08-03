@@ -206,7 +206,7 @@ used.
       `origin/codex/commguard-kaggle-prototype-completion`.
 - [x] Draft PR to `main` is open at
       `https://github.com/waqasm86/CommGuard/pull/3`.
-- [ ] Final report commit is pushed; local and remote branch SHAs match and the
+- [x] Final report commit is pushed; local and remote branch SHAs match and the
       working tree is clean.
 
 ## Progress log
@@ -244,5 +244,7 @@ used.
   build, canonical generation check, delivery verification, notebook audit,
   package-content inspection, and immutable-evidence hash audit all passed.
 - [x] `2026-08-04` Published three logical commits and opened draft PR #3.
-- [ ] Commit and publish this final report/plan update, then verify the exact
-  branch-tip SHA and clean worktree.
+- [x] `2026-08-04` Published completion-report commit `0bd2b9a`, verified its
+  local SHA, remote SHA, and draft-PR head were identical, and observed a clean
+  worktree. This final plan-only bookkeeping commit is followed by the same
+  publication verification in the session handoff.
