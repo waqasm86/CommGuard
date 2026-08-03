@@ -6,6 +6,7 @@ import tarfile
 
 import pytest
 
+import commguard.artifacts.storage as storage
 from commguard.artifacts import ArtifactStore, restore_archive, sha256_file
 from commguard.exceptions import ArtifactExistsError, ValidationError
 from commguard.schemas import SCHEMA_VERSION
@@ -42,6 +43,47 @@ def test_export_contains_regular_artifacts(tmp_path) -> None:
     output = store.export(tmp_path / "bundle.tar.gz")
     with tarfile.open(output, "r:gz") as archive:
         assert "results/value.json" in archive.getnames()
+    digest = sha256_file(output)
+    assert len(digest) == 64
+    with pytest.raises(ArtifactExistsError, match="refusing to overwrite archive"):
+        store.export(output)
+    assert sha256_file(output) == digest
+
+
+def test_export_member_selection_is_sorted_and_excludes_symlinks(tmp_path) -> None:
+    store = ArtifactStore(tmp_path / "artifacts")
+    store.initialize()
+    store.write_text("results/z-last.txt", "z\n")
+    store.write_text("results/a-first.txt", "a\n")
+    (store.root / "results/link.txt").symlink_to(store.root / "results/a-first.txt")
+
+    output = store.export(tmp_path / "bundle.tar.gz")
+
+    with tarfile.open(output, "r:gz") as archive:
+        names = archive.getnames()
+    assert names == sorted(names)
+    assert "results/a-first.txt" in names
+    assert "results/z-last.txt" in names
+    assert "results/link.txt" not in names
+
+
+def test_export_cleans_temporary_file_after_failure(tmp_path, monkeypatch) -> None:
+    store = ArtifactStore(tmp_path / "artifacts")
+    store.initialize()
+    store.write_json("results/value.json", artifact())
+    output = tmp_path / "failed.tar.gz"
+
+    monkeypatch.setattr(
+        storage.tarfile,
+        "open",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("archive failure")),
+    )
+
+    with pytest.raises(RuntimeError, match="archive failure"):
+        store.export(output)
+
+    assert not output.exists()
+    assert not list(tmp_path.glob(".failed.tar.gz.*.tmp"))
 
 
 def test_restore_archive_is_hash_checked_create_only_and_safe(tmp_path) -> None:

@@ -10,30 +10,13 @@ import socket
 import subprocess
 import time
 import traceback
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 from commguard.adversarial import should_synchronize, synchronization_steps
 from commguard.duration import DurationController, DurationPolicy
-
-SUPPORTED_WORKER_MODES = frozenset(
-    {
-        "smoke",
-        "calibration",
-        "ddp_train",
-        "sparse_sync_training",
-        "inference_independent",
-        "inference_single_gpu",
-        "inference_synchronized",
-        "synthetic_communication_decoy",
-        "control_compute",
-        "control_host_transfer",
-        "control_model_load",
-        "control_peer_copy",
-        "control_idle",
-    }
-)
 
 
 class EventWriter:
@@ -783,6 +766,105 @@ def _run_calibration(
     )
 
 
+def _run_idle(
+    torch: Any,
+    dist: Any,
+    writer: EventWriter,
+    config: dict[str, Any],
+    local_rank: int,
+) -> None:
+    """Measure a bounded quiet interval after proving two-rank participation."""
+    idle_interval_s = float(config.get("idle_interval_s", 0.25))
+    if not 0 < idle_interval_s <= 5:
+        raise ValueError("idle_interval_s must be greater than zero and at most five seconds")
+    # Coordination is deliberately outside the measured interval. The process
+    # group and the initial participation all-reduce were established by main().
+    dist.barrier()
+    torch.cuda.synchronize(local_rank)
+    controller = _duration_controller(config)
+    writer.emit(
+        "measurement_start",
+        measurement_start_monotonic_ns=controller.measurement_start_ns,
+        mode="idle",
+    )
+    step = 0
+    while controller.should_continue():
+        time.sleep(idle_interval_s)
+        writer.emit("heartbeat", step=step, mode="idle")
+        controller.complete_iteration()
+        step += 1
+    torch.cuda.synchronize(local_rank)
+    interval = controller.finish()
+    writer.emit("measurement_interval", **interval.to_dict())
+    writer.emit(
+        "measurement_end",
+        measurement_end_monotonic_ns=interval.measurement_end_monotonic_ns,
+        mode="idle",
+    )
+
+
+def _run_smoke_mode(
+    torch: Any,
+    dist: Any,
+    writer: EventWriter,
+    config: dict[str, Any],
+    local_rank: int,
+) -> None:
+    del torch, dist, config, local_rank
+    writer.emit("heartbeat", step=0)
+
+
+def _run_independent_inference_mode(
+    torch: Any,
+    dist: Any,
+    writer: EventWriter,
+    config: dict[str, Any],
+    local_rank: int,
+) -> None:
+    _run_inference(torch, dist, writer, config, local_rank, synchronized=False)
+
+
+def _run_synchronized_inference_mode(
+    torch: Any,
+    dist: Any,
+    writer: EventWriter,
+    config: dict[str, Any],
+    local_rank: int,
+) -> None:
+    _run_inference(torch, dist, writer, config, local_rank, synchronized=True)
+
+
+def _run_registered_control_mode(
+    torch: Any,
+    dist: Any,
+    writer: EventWriter,
+    config: dict[str, Any],
+    local_rank: int,
+) -> None:
+    mode = str(config["mode"])
+    _run_control(torch, dist, writer, config, local_rank, mode.removeprefix("control_"))
+
+
+WorkerHandler = Callable[[Any, Any, EventWriter, dict[str, Any], int], None]
+WORKER_MODE_HANDLERS: dict[str, WorkerHandler] = {
+    "smoke": _run_smoke_mode,
+    "idle": _run_idle,
+    "calibration": _run_calibration,
+    "ddp_train": _run_ddp_training,
+    "sparse_sync_training": _run_sparse_sync_training,
+    "inference_independent": _run_independent_inference_mode,
+    "inference_single_gpu": _run_single_gpu_inference,
+    "inference_synchronized": _run_synchronized_inference_mode,
+    "synthetic_communication_decoy": _run_synthetic_communication_decoy,
+    "control_compute": _run_registered_control_mode,
+    "control_host_transfer": _run_registered_control_mode,
+    "control_model_load": _run_registered_control_mode,
+    "control_peer_copy": _run_registered_control_mode,
+    "control_idle": _run_registered_control_mode,
+}
+SUPPORTED_WORKER_MODES = frozenset(WORKER_MODE_HANDLERS)
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=Path, required=True)
@@ -844,32 +926,14 @@ def main() -> int:
             raise RuntimeError("initial participation reduction failed")
         writer.emit("cuda_operation_complete", checksum=int(evidence.item()))
         mode = str(config["mode"])
-        if mode not in SUPPORTED_WORKER_MODES:
+        handler = WORKER_MODE_HANDLERS.get(mode)
+        if handler is None:
             raise ValueError(f"unknown mode {mode!r}")
         if config.get("inject_rank_crash") == rank:
             raise RuntimeError("injected rank crash")
         if config.get("inject_timeout_rank") == rank:
             time.sleep(float(config.get("process_group_timeout_s", 120)) * 2)
-        if mode == "smoke":
-            writer.emit("heartbeat", step=0)
-        elif mode == "calibration":
-            _run_calibration(torch, dist, writer, config, local_rank)
-        elif mode == "ddp_train":
-            _run_ddp_training(torch, dist, writer, config, local_rank)
-        elif mode == "sparse_sync_training":
-            _run_sparse_sync_training(torch, dist, writer, config, local_rank)
-        elif mode == "inference_independent":
-            _run_inference(torch, dist, writer, config, local_rank, synchronized=False)
-        elif mode == "inference_single_gpu":
-            _run_single_gpu_inference(torch, dist, writer, config, local_rank)
-        elif mode == "inference_synchronized":
-            _run_inference(torch, dist, writer, config, local_rank, synchronized=True)
-        elif mode == "synthetic_communication_decoy":
-            _run_synthetic_communication_decoy(torch, dist, writer, config, local_rank)
-        elif mode.startswith("control_"):
-            _run_control(torch, dist, writer, config, local_rank, mode.removeprefix("control_"))
-        else:
-            raise AssertionError(f"supported mode {mode!r} has no dispatch path")
+        handler(torch, dist, writer, config, local_rank)
         dist.barrier()
         writer.emit("completion", healthy=True)
         return 0

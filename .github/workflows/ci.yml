@@ -30,7 +30,10 @@ jobs:
       - name: CPU-safe tests
         run: pytest -m "not gpu and not multigpu and not network and not slow"
       - name: Canonical notebook policy
-        run: python tools/generate_canonical_notebooks.py --check
+        run: |
+          python tools/generate_canonical_notebooks.py
+          git diff --exit-code -- notebooks
+          python tools/generate_canonical_notebooks.py --check
       - name: Public delivery safety scan
         run: python tools/verify_delivery.py
       - name: Build wheel and source distribution

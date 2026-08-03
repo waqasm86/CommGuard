@@ -98,6 +98,33 @@ Acceptance: all available CPU, lint, format, build, import, CLI, notebook, secre
 
 ## Progress log
 
+- [x] `2026-08-02` Re-verified clean reviewed commit `0e3b72c8` and created
+  `codex/fix-calibration-idle-and-kaggle-workflow` without rewriting history or
+  modifying historical evidence.
+- [x] `2026-08-02` Reproduced the calibration-v3 failure: `calibration_idle`
+  resolved to unsupported worker mode `idle`, so every idle launch raised
+  `ValueError: unknown mode 'idle'`.
+- [x] `2026-08-02` Implemented and CPU-tested the explicit two-rank idle
+  lifecycle, measured-interval heartbeats, participation/cleanup evidence, and
+  exclusion of setup/teardown collectives from idle PCIe summaries.
+- [x] `2026-08-02` Made preflight create/validate output directories, corrected
+  per-payload calibration identities, added create-only one-sweep markers and
+  exact 15-run validation, and hardened create-only atomic archive export.
+- [x] `2026-08-02` Regenerated/audited all four canonical notebooks, aligned the
+  failed-run claim boundary, and passed the full pre-commit gate: 169 CPU-safe
+  tests passed, one optional scikit-learn test skipped, six hardware tests were
+  deselected, Ruff check/format passed, and the 0.2.0 wheel/sdist built.
+- [x] `2026-08-02` Completed fresh-wheel, delivery/path,
+  distribution-content, evidence-hash, notebook, and final Git checks. Version
+  0.2.0 imported from an isolated environment's `site-packages`; CLI help and
+  `pip check` passed; wheel/sdist contents were clean; all eight indexed
+  historical byte sizes and SHA-256 hashes matched; canonical notebooks were
+  deterministic and output-free; `git diff --check` and strict `git fsck`
+  passed (with only pre-existing unreachable blobs reported).
+- [x] `2026-08-02` Pushed only
+  `codex/fix-calibration-idle-and-kaggle-workflow`, configured its matching
+  origin upstream, and left merge and all Kaggle execution to the human gates.
+
 - [x] `2026-08-02` Re-audited the authoritative checkout at completion commit
   `5ac130c322df7c1c9c359ae2d568d515c153d1b0`, verified the Git remote/history,
   created `codex/commguard-pre-kaggle-audit-fixes`, and preserved all immutable

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from copy import deepcopy
 from typing import Any
 
@@ -16,6 +17,12 @@ BENIGN_REQUIRED_FAMILIES = (
     "control_host_transfer",
     "control_model_or_checkpoint_load",
     "control_idle",
+)
+CALIBRATION_COLLECTIVES = frozenset(
+    {"all_reduce", "broadcast", "all_gather", "reduce_scatter", "send_recv"}
+)
+_CALIBRATION_WORKLOAD = re.compile(
+    r"^collective_(all_reduce|broadcast|all_gather|reduce_scatter|send_recv)_([1-9][0-9]*)mib$"
 )
 
 BASE_MODEL = {
@@ -44,7 +51,9 @@ WORKLOADS: dict[str, dict[str, Any]] = {
         "label": "calibration",
         "family": "calibration_idle",
         "designation": "calibration",
-        "duration_s": 15.0,
+        "min_measured_seconds": 15.0,
+        "iteration_cap": None,
+        "idle_interval_s": 0.25,
         "estimated_seconds": 15,
         "warmup_seconds": 0.0,
     },
@@ -503,8 +512,27 @@ def get_workload(name: str) -> dict[str, Any]:
     validate_workload_registry()
     try:
         return deepcopy(WORKLOADS[name])
-    except KeyError as exc:
-        raise ValueError(f"unknown workload {name!r}") from exc
+    except KeyError:
+        match = _CALIBRATION_WORKLOAD.fullmatch(name)
+        if match is None:
+            raise ValueError(f"unknown workload {name!r}") from None
+        collective, payload_text = match.groups()
+        payload_mib = int(payload_text)
+        return {
+            **deepcopy(WORKLOADS["collective_all_reduce_1mib"]),
+            "config_id": f"calibration-{collective.replace('_', '-')}-{payload_mib}mib-v2",
+            "collective": collective,
+            "payload_mib": payload_mib,
+        }
+
+
+def calibration_workload_name(collective: str, payload_mib: int) -> str:
+    """Return the stable payload-specific identity for one calibration run."""
+    if collective not in CALIBRATION_COLLECTIVES:
+        raise ValueError(f"unsupported calibration collective {collective!r}")
+    if isinstance(payload_mib, bool) or not isinstance(payload_mib, int) or payload_mib <= 0:
+        raise ValueError("calibration payload_mib must be a positive integer")
+    return f"collective_{collective}_{payload_mib}mib"
 
 
 def profile_workloads(profile: str) -> list[str]:

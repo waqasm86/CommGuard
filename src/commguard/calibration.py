@@ -552,3 +552,182 @@ def verify_calibration_reference(
                 f"calibration {label} mismatch: expected={sorted(expected)} observed={observed!r}"
             )
     return path, calibration
+
+
+def validate_standard_calibration_result(
+    artifact_root: str | Path,
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    """Verify one complete 3 × (idle + four-payload) calibration evidence matrix."""
+    from commguard.workloads import calibration_workload_name
+
+    root = Path(artifact_root).resolve()
+    errors: list[str] = []
+    observations = list(result.get("observations", []))
+    expected_payloads = STANDARD_CALIBRATION_PAYLOAD_MIB
+    expected_count = STANDARD_CALIBRATION_REPETITIONS * (1 + len(expected_payloads))
+    if len(observations) != expected_count:
+        errors.append(f"expected exactly {expected_count} observations, found {len(observations)}")
+    run_ids = [str(row.get("run_id", "")) for row in observations]
+    if any(not run_id for run_id in run_ids) or len(run_ids) != len(set(run_ids)):
+        errors.append("calibration run IDs must be present and unique")
+    idle_rows = [row for row in observations if row.get("observation_type") == "idle_baseline"]
+    if len(idle_rows) != STANDARD_CALIBRATION_REPETITIONS:
+        errors.append(
+            f"expected {STANDARD_CALIBRATION_REPETITIONS} idle observations, found {len(idle_rows)}"
+        )
+    for payload in expected_payloads:
+        payload_rows = [
+            row
+            for row in observations
+            if row.get("observation_type") == "collective" and row.get("payload_mib") == payload
+        ]
+        if len(payload_rows) != STANDARD_CALIBRATION_REPETITIONS:
+            errors.append(
+                f"expected {STANDARD_CALIBRATION_REPETITIONS} observations for "
+                f"{payload} MiB, found {len(payload_rows)}"
+            )
+    unexpected_payloads = {
+        row.get("payload_mib")
+        for row in observations
+        if row.get("observation_type") == "collective"
+    } - set(expected_payloads)
+    if unexpected_payloads:
+        errors.append(f"unexpected collective payloads: {sorted(unexpected_payloads, key=str)}")
+
+    for row in observations:
+        run_id = str(row.get("run_id", ""))
+        is_idle = row.get("observation_type") == "idle_baseline"
+        expected_name = (
+            "calibration_idle"
+            if is_idle
+            else calibration_workload_name(str(row.get("collective")), int(row["payload_mib"]))
+        )
+        if row.get("workload_name") != expected_name:
+            errors.append(
+                f"run {run_id or '<missing>'} workload label mismatch: "
+                f"expected={expected_name!r} observed={row.get('workload_name')!r}"
+            )
+        expected_mode = "idle" if is_idle else "calibration"
+        if row.get("worker_mode") != expected_mode:
+            errors.append(
+                f"run {run_id or '<missing>'} worker mode mismatch: "
+                f"expected={expected_mode!r} observed={row.get('worker_mode')!r}"
+            )
+        if row.get("exit_status") != "completed" or not row.get("participation_valid"):
+            continue
+        run_directory_value = str(row.get("run_directory", ""))
+        run_directory = (root / run_directory_value).resolve()
+        try:
+            run_directory.relative_to(root)
+        except ValueError:
+            errors.append(f"run {run_id} directory escapes the artifact root")
+            continue
+        if not run_directory.is_dir():
+            errors.append(f"successful run {run_id} has no run directory: {run_directory_value}")
+            continue
+        manifest_path = run_directory / "manifest.json"
+        if not manifest_path.is_file():
+            errors.append(f"successful run {run_id} has no manifest.json")
+            continue
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        config = dict(manifest.get("config", {}))
+        if manifest.get("workload_name") != expected_name:
+            errors.append(f"run {run_id} manifest workload name disagrees with its observation")
+        if config.get("mode") != expected_mode:
+            errors.append(f"run {run_id} manifest worker mode disagrees with its observation")
+        if not is_idle:
+            if config.get("collective") != row.get("collective"):
+                errors.append(f"run {run_id} collective disagrees with its observation")
+            if config.get("payload_mib") != row.get("payload_mib"):
+                errors.append(f"run {run_id} payload disagrees with its observation")
+            continue
+        for rank in (0, 1):
+            event_path = run_directory / f"rank-{rank}.events.jsonl"
+            if not event_path.is_file():
+                errors.append(f"successful idle run {run_id} is missing rank {rank} events")
+                continue
+            events = [
+                json.loads(line)
+                for line in event_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            interval = next(
+                (event for event in events if event.get("event") == "measurement_interval"),
+                None,
+            )
+            if interval is None:
+                errors.append(
+                    f"successful idle run {run_id} rank {rank} lacks measurement interval"
+                )
+                continue
+            details = dict(interval.get("details", {}))
+            start = details.get("measurement_start_monotonic_ns")
+            end = details.get("measurement_end_monotonic_ns")
+            if not isinstance(start, int) or not isinstance(end, int):
+                errors.append(f"successful idle run {run_id} rank {rank} has invalid interval")
+                continue
+            measured_events = [
+                event
+                for event in events
+                if isinstance(event.get("monotonic_ns"), int)
+                and start <= event["monotonic_ns"] <= end
+            ]
+            collective_events = [
+                str(event.get("event"))
+                for event in measured_events
+                if str(event.get("event", "")).startswith("collective_")
+                or event.get("event")
+                in {"gradient_sync_complete", "parameter_average_complete", "decoy_burst_complete"}
+            ]
+            if collective_events:
+                errors.append(
+                    f"idle run {run_id} rank {rank} contains measured collective events: "
+                    f"{collective_events}"
+                )
+
+    sweep_id = str(result.get("sweep_id", ""))
+    started = root / "results" / "calibration-sweeps" / sweep_id / "started.json"
+    if not sweep_id or not started.is_file():
+        errors.append("exactly one matching calibration sweep marker is required")
+    reference = result.get("reference")
+    if not isinstance(reference, dict):
+        errors.append("calibration result requires an exact artifact reference")
+    else:
+        relative = Path(str(reference.get("calibration_artifact_path", "")))
+        calibration_path = (root / relative).resolve()
+        try:
+            calibration_path.relative_to(root)
+        except ValueError:
+            errors.append("calibration reference escapes the artifact root")
+        else:
+            if not calibration_path.is_file():
+                errors.append("calibration reference does not point to an existing JSON artifact")
+            else:
+                expected_hash = reference.get("calibration_sha256")
+                if not isinstance(expected_hash, str) or len(expected_hash) != 64:
+                    errors.append("calibration artifact SHA-256 is missing")
+                elif sha256_file(calibration_path) != expected_hash:
+                    errors.append("calibration artifact SHA-256 does not match its reference")
+
+    if errors:
+        raise CalibrationError("standard calibration validation failed: " + "; ".join(errors))
+    failed_run_count = sum(
+        row.get("exit_status") != "completed" or not row.get("participation_valid")
+        for row in observations
+    )
+    return {
+        "clean_standard_calibration": True,
+        "planned_run_count": expected_count,
+        "observation_count": len(observations),
+        "idle_observation_count": len(idle_rows),
+        "payload_observation_counts": {
+            str(payload): sum(
+                row.get("observation_type") == "collective" and row.get("payload_mib") == payload
+                for row in observations
+            )
+            for payload in expected_payloads
+        },
+        "failed_run_count": failed_run_count,
+        "failed_runs_preserved": True,
+    }

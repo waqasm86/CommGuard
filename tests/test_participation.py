@@ -25,7 +25,16 @@ def write_events(root, rank: int, events: list[str], same_uuid: bool = False) ->
                 "measurement_end_monotonic_ns": 31_000_000_000,
                 "measured_duration_seconds": 30.0,
             }
-        records.append({"event": event, "details": details})
+        monotonic_ns = 500_000_000
+        if event == "measurement_start":
+            monotonic_ns = 1_000_000_000
+        elif event == "heartbeat":
+            monotonic_ns = 2_000_000_000
+        elif event in {"measurement_interval", "measurement_end"}:
+            monotonic_ns = 31_000_000_000
+        elif event == "process_group_destroyed":
+            monotonic_ns = 32_000_000_000
+        records.append({"event": event, "details": details, "monotonic_ns": monotonic_ns})
     path.write_text("\n".join(json.dumps(record) for record in records) + "\n")
 
 
@@ -114,3 +123,24 @@ def test_adversarial_participation_requires_strategy_summary(tmp_path) -> None:
 
     assert not valid
     assert "strategy_summary" in " ".join(problems)
+
+
+def test_idle_participation_requires_full_lifecycle_for_both_ranks(tmp_path) -> None:
+    required = [
+        "startup",
+        "cuda_operation_complete",
+        "measurement_start",
+        "heartbeat",
+        "measurement_interval",
+        "measurement_end",
+        "completion",
+        "process_group_destroyed",
+    ]
+    write_events(tmp_path, 0, required)
+    write_events(tmp_path, 1, required)
+
+    valid, problems, codes = validate_participation(tmp_path, "idle")
+
+    assert valid
+    assert not problems
+    assert codes == {"0": 0, "1": 0}

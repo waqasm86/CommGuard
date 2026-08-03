@@ -56,6 +56,12 @@ def test_canonical_notebook_inventory_is_valid_and_unexecuted() -> None:
         assert "class ArtifactStore" not in source
         assert "drive.google.com/file/d/" not in source
         assert "REVIEWED_COMMIT" in source
+        assert 'SOURCE_ROOT = (REPOSITORY / "src").resolve()' in source
+        assert 'os.environ["PYTHONPATH"]' in source
+        assert "sys.path.insert(0, str(SOURCE_ROOT))" in source
+        assert "importlib.invalidate_caches()" in source
+        assert 'name.startswith("commguard.")' in source
+        assert "commguard_path.relative_to(SOURCE_ROOT)" in source
         assert "--no-build-isolation" in source
         assert "--no-deps" in source
         assert 'checkout", "main' not in source
@@ -81,10 +87,33 @@ def test_canonical_notebook_inventory_is_valid_and_unexecuted() -> None:
     assert "ADVERSARIAL_HUMAN_APPROVAL = False" in adversarial
 
     calibration = (notebook_root / names[0]).read_text(encoding="utf-8")
-    assert "payload_mib=(1, 4, 16, 64)" in calibration
-    assert "repetitions=3" in calibration
-    assert "idle_usable_repetitions" in calibration
-    assert "exact_calibration_reference_for_next_notebook" in calibration
+    calibration_notebook = json.loads(calibration)
+    calibration_source = "\n".join(
+        "".join(cell["source"])
+        for cell in calibration_notebook["cells"]
+        if cell["cell_type"] == "code"
+    )
+    assert "payload_mib=(1, 4, 16, 64)" in calibration_source
+    assert "repetitions=3" in calibration_source
+    assert "idle_usable_repetitions" in calibration_source
+    assert "exact_calibration_reference_for_next_notebook" in calibration_source
+    assert 'shutil.which("nvidia-smi")' in calibration_source
+    assert "Expected exactly two Tesla T4 GPUs" in calibration_source
+    assert "torch.distributed.is_nccl_available()" in calibration_source
+    assert "memory_total_mib" in calibration_source
+    assert calibration_source.count("NOTEBOOK_RUN_ID = datetime.now") == 1
+    assert "commguard-calibration-v3-{NOTEBOOK_RUN_ID}" in calibration_source
+    assert "ARTIFACTS.mkdir(parents=True, exist_ok=False)" in calibration_source
+    assert "environment/notebook-bootstrap.json" in calibration_source
+    assert '"source_repository": "commguard-source"' in calibration_source
+    assert '"artifact_schema_version": CURRENT_SCHEMA_VERSION' in calibration_source
+    assert "progress_callback=" in calibration_source
+    assert "standard_sweep_validation" in calibration_source
+    assert 'SHA_FILE.open("x"' in calibration_source
+    assert "FAILED/INCONCLUSIVE EVIDENCE WAS PRESERVED" in calibration_source
+    assert "Do not run the benign notebook" in calibration_source
+    calibration_ids = [cell["id"] for cell in calibration_notebook["cells"]]
+    assert calibration_ids.index("cal-workspace") < calibration_ids.index("cal-context")
 
     benign = (notebook_root / names[1]).read_text(encoding="utf-8")
     assert "PRIOR_CALIBRATION_ARTIFACT_PATH" in benign
@@ -208,7 +237,9 @@ def test_public_claim_boundaries_remain_explicit() -> None:
     assert "DDP versus idle" in current
     assert "the only training test run was missed" in current
     assert "tiny DDP-versus-idle diagnostic" in current
-    assert "No new dual-T4 or adversarial run exists yet" in limitations
+    assert "No successful modern calibration" in limitations
+    assert "correctly `not_supported`" in limitations
+    assert "cannot support a conclusion about PCIe telemetry" in limitations
     assert "Physical multi-node validation" in limitations
     assert "pending" in limitations
     assert "reliable training-versus-inference detection" in limitations

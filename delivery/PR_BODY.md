@@ -2,10 +2,18 @@
 
 Suggested title:
 
-> Fix CommGuard pre-Kaggle calibration, provenance, and delivery blockers
+> Fix calibration-v3 idle dispatch and Kaggle evidence workflow
 
 ## Summary
 
+- implement the missing two-rank idle worker path with lifecycle, heartbeat,
+  participation, and measured-interval evidence but no measured collective;
+- make preflight prepare safe output directories;
+- use truthful payload-specific calibration identities, refuse repeated sweeps,
+  and validate the exact 15-run standard matrix;
+- make archive export non-destructive and atomic by default;
+- harden and regenerate the canonical Kaggle notebooks with exact source/import,
+  T4, workspace, provenance, progress, validation, and export checks;
 - repair repository/notebook policy without deleting historical user evidence;
 - remove tracked local state, scan every tracked public text file for personal
   paths, and ignore future `.agent/state/` captures;
@@ -26,7 +34,7 @@ Suggested title:
 
 ## Validation
 
-- 147 CPU-safe tests passed; one optional analysis integration skipped; five
+- 169 CPU-safe tests passed; one optional analysis integration skipped; six
   GPU/multi-GPU tests deselected.
 - Ruff check and format check passed.
 - Wheel and sdist built as `commguard 0.2.0`.
@@ -36,7 +44,12 @@ Suggested title:
 
 ## Research status
 
-No new GPU, Kaggle, adversarial, or physical multi-node result is claimed.
+The first calibration-v3 Kaggle T4 x2 attempt is reported only as debugging
+evidence: reviewed-source import, CUDA/NCCL, and collectives worked, but the
+missing `idle` dispatch made every idle run fail. Its zero-idle calibration was
+correctly `not_supported`; it is not evidence that PCIe telemetry failed and
+must not gate a benign run. No successful modern calibration, benign corpus,
+detector, adversarial, or physical multi-node result is claimed.
 Historical evidence has only
 five-second DDP/idle feature coverage, includes calibration-idle rows, and the
 primary PCIe-only test missed its training run. Full benign coverage,

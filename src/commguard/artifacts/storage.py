@@ -169,7 +169,12 @@ class ArtifactStore:
         if output_path == self.root or self.root in output_path.parents:
             raise ValidationError("export archive must be outside the artifact root")
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(dir=output_path.parent, delete=False) as temporary:
+        with tempfile.NamedTemporaryFile(
+            dir=output_path.parent,
+            prefix=f".{output_path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary:
             temp_path = Path(temporary.name)
         try:
             with tarfile.open(temp_path, mode="w:gz") as archive:

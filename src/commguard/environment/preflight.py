@@ -199,6 +199,21 @@ def _environment_fingerprint(data: dict[str, Any]) -> str:
     return hashlib.sha256(json.dumps(stable, sort_keys=True, default=str).encode()).hexdigest()
 
 
+def _prepare_output_directory(output: str | Path | None) -> Path:
+    path = Path.cwd().resolve() if output is None else Path(output).resolve()
+    if output is None:
+        return path
+    if path.exists() and not path.is_dir():
+        raise ReadinessError(f"preflight output path is not a directory: {path}")
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise ReadinessError(f"cannot create preflight output directory {path}: {exc}") from exc
+    if not path.is_dir():
+        raise ReadinessError(f"preflight output path is not a directory: {path}")
+    return path
+
+
 def check_environment(
     strict: bool = False,
     output: str | Path | None = None,
@@ -206,12 +221,17 @@ def check_environment(
     provenance: ProvenanceContext | None = None,
 ) -> dict[str, Any]:
     """Inspect runtime facts; strict mode requires exactly two NVIDIA T4s and NCCL."""
+    output_path = _prepare_output_directory(output)
     gpus, gpu_query = _gpu_inventory()
     torch_info = _torch_details()
     topology = _command(["nvidia-smi", "topo", "-m"])
     nvcc = _command(["nvcc", "--version"])
     telemetry_capabilities = _telemetry_capabilities()
-    disk = shutil.disk_usage(Path(output or ".").resolve())
+    try:
+        disk = shutil.disk_usage(output_path)
+    except OSError as exc:
+        message = f"cannot inspect preflight output directory {output_path}: {exc}"
+        raise ReadinessError(message) from exc
     try:
         page_size = os.sysconf("SC_PAGE_SIZE")
         pages = os.sysconf("SC_PHYS_PAGES")
@@ -305,7 +325,7 @@ def check_environment(
         ],
     }
     if output is not None:
-        store = ArtifactStore(output)
+        store = ArtifactStore(output_path)
         store.initialize()
         store.write_json(
             f"environment/preflight-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')}.json",

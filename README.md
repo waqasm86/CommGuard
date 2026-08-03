@@ -32,6 +32,14 @@ classifier that does not generalize is a valid research result.
 
 ## Current evidence status
 
+**Modern calibration-v3 debugging evidence:** the first attempted Kaggle T4 x2
+run checked out the reviewed source and reached CUDA, NCCL, and the collective
+runs, but every idle run failed with `ValueError: unknown mode 'idle'`. With zero
+usable idle repetitions, the modern result was correctly `not_supported`. That
+archive must not gate a benign run: it records a software dispatch defect, not
+an empirical finding that PCIe telemetry is unusable. A clean calibration rerun
+from this patched branch is required.
+
 **Observed limitation:** the current pilot's feature coverage is DDP versus idle
 only. Although all 18 planned benign runs completed, the saved feature artifact
 contains 16 five-second windows from eight DDP/idle runs; inference, compute, and

@@ -26,6 +26,9 @@ ship a validated detector or new GPU results.
 - Numerically stable simple-rule probabilities for extreme detector logits.
 - Evidence index, negative historical coverage analysis, report template, and
   complete citations/claim boundaries.
+- A real two-rank idle calibration worker, safe preflight output preparation,
+  accurate payload identities, one-sweep enforcement, standard-matrix
+  validation, and non-destructive atomic export.
 
 ## Compatibility
 
@@ -41,4 +44,7 @@ ship a validated detector or new GPU results.
 - Historical detector evidence is DDP versus idle only and does not pass the
   current 30-second eight-family gate.
 - No adversarial or physical multi-node result is included.
-- No new Kaggle or dual-T4 run is included; canonical notebooks are unexecuted.
+- The first modern calibration-v3 T4 x2 attempt failed all idle launches because
+  mode `idle` was missing and was correctly `not_supported`. It is debugging
+  evidence only; no successful modern calibration or downstream run is included.
+- Canonical notebooks remain unexecuted.

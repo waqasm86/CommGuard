@@ -90,6 +90,8 @@ def validate_participation(
         }
     if mode == "calibration":
         required.add("collective_complete")
+    if mode == "idle":
+        required |= {"measurement_start", "measurement_end", "process_group_destroyed"}
     if mode == "sparse_sync_training":
         required |= {
             "model_ready",
