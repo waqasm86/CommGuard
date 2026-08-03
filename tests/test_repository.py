@@ -34,12 +34,22 @@ def test_kaggle_snapshot_is_verbatim() -> None:
 def test_canonical_notebook_inventory_is_valid_and_unexecuted() -> None:
     notebook_root = ROOT / "notebooks"
     inventory = json.loads((notebook_root / "canonical_notebooks.json").read_text(encoding="utf-8"))
-    names = inventory["canonical_notebooks"]
-    assert inventory["schema_version"] == 1
+    entries = inventory["canonical_notebooks"]
+    names = [entry["filename"] for entry in entries]
+    assert inventory["schema_version"] == 2
+    assert inventory["policy_version"] == "commguard-notebook-policy-v2"
     assert names == CANONICAL_NOTEBOOKS
+    assert [entry["order"] for entry in entries] == [1, 2, 3, 4]
+    assert all(entry["role"].strip() for entry in entries)
     assert len(names) == len(set(names))
     assert all("-" not in name and name.endswith(".ipynb") for name in names)
     assert (ROOT / "docs/notebook-policy.md").is_file()
+    assert inventory["diagnostic_notebooks"] == [
+        {
+            "filename": "diagnostics/commguard_calibration_v4_sampling_study.ipynb",
+            "role": "diagnostic sampling-resolution study; never a canonical calibration gate",
+        }
+    ]
 
     for name in names:
         notebook = json.loads((notebook_root / name).read_text(encoding="utf-8"))
@@ -139,6 +149,19 @@ def test_canonical_notebooks_match_their_generator() -> None:
     )
 
     assert result.returncode == 0, result.stderr
+
+
+def test_active_notebook_directory_contains_only_reviewed_workflow() -> None:
+    active = sorted(path.name for path in (ROOT / "notebooks").glob("*.ipynb"))
+    assert active == sorted(CANONICAL_NOTEBOOKS)
+    diagnostic = ROOT / "notebooks/diagnostics/commguard_calibration_v4_sampling_study.ipynb"
+    notebook = json.loads(diagnostic.read_text(encoding="utf-8"))
+    assert notebook["nbformat"] == 4
+    assert all(
+        cell.get("execution_count") is None and not cell.get("outputs")
+        for cell in notebook["cells"]
+        if cell["cell_type"] == "code"
+    )
 
 
 def test_delivery_policy_scan_passes() -> None:

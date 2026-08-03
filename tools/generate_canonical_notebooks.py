@@ -10,6 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 NOTEBOOK_ROOT = ROOT / "notebooks"
 REPOSITORY_URL = "https://github.com/waqasm86/CommGuard.git"
+POLICY_VERSION = "commguard-notebook-policy-v2"
 
 
 def markdown(identifier: str, source: str) -> dict[str, object]:
@@ -739,6 +740,43 @@ NOTEBOOKS = {
     "commguard_adversarial_redteam_v1.ipynb": adversarial_notebook,
 }
 
+NOTEBOOK_ROLES = {
+    "commguard_calibration_v3.ipynb": (
+        "calibrate dual-T4 telemetry support and accepted payload sensitivity"
+    ),
+    "commguard_benign_corpus_v2.ipynb": (
+        "collect a duration-valid, resumable benign workload corpus"
+    ),
+    "commguard_detector_evaluation_v2.ipynb": (
+        "evaluate grouped communication-only and auxiliary detector baselines"
+    ),
+    "commguard_adversarial_redteam_v1.ipynb": (
+        "evaluate bounded periodic-synchronization training with a sealed holdout"
+    ),
+}
+
+
+def canonical_inventory() -> dict[str, object]:
+    """Return the ordered machine-readable notebook policy inventory."""
+    return {
+        "schema_version": 2,
+        "policy_version": POLICY_VERSION,
+        "canonical_notebooks": [
+            {"order": order, "filename": name, "role": NOTEBOOK_ROLES[name]}
+            for order, name in enumerate(NOTEBOOKS, start=1)
+        ],
+        "diagnostic_notebooks": [
+            {
+                "filename": "diagnostics/commguard_calibration_v4_sampling_study.ipynb",
+                "role": (
+                    "diagnostic sampling-resolution study; never a canonical calibration gate"
+                ),
+            }
+        ],
+        "executed_name_pattern": "commguard-*.ipynb",
+        "policy_document": "../docs/notebook-policy.md",
+    }
+
 
 def encoded_notebook(cells: list[dict[str, object]]) -> str:
     notebook = {
@@ -768,6 +806,16 @@ def main() -> int:
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
     mismatches: list[str] = []
+    inventory_path = NOTEBOOK_ROOT / "canonical_notebooks.json"
+    expected_inventory = json.dumps(canonical_inventory(), indent=2, ensure_ascii=False) + "\n"
+    if args.check:
+        if (
+            not inventory_path.is_file()
+            or inventory_path.read_text(encoding="utf-8") != expected_inventory
+        ):
+            mismatches.append(inventory_path.name)
+    else:
+        inventory_path.write_text(expected_inventory, encoding="utf-8")
     for name, builder in NOTEBOOKS.items():
         expected = encoded_notebook(builder())
         path = NOTEBOOK_ROOT / name

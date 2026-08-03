@@ -62,7 +62,16 @@ def scan_text(path: Path, failures: list[str], *, root: Path = ROOT) -> None:
 def check_notebooks(failures: list[str], *, root: Path = ROOT) -> None:
     inventory_path = root / "notebooks/canonical_notebooks.json"
     inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
-    for name in inventory["canonical_notebooks"]:
+    entries = inventory["canonical_notebooks"]
+    names = [entry["filename"] if isinstance(entry, dict) else entry for entry in entries]
+    if names != [
+        "commguard_calibration_v3.ipynb",
+        "commguard_benign_corpus_v2.ipynb",
+        "commguard_detector_evaluation_v2.ipynb",
+        "commguard_adversarial_redteam_v1.ipynb",
+    ]:
+        failures.append("canonical notebook inventory order is invalid")
+    for name in names:
         path = inventory_path.parent / name
         notebook = json.loads(path.read_text(encoding="utf-8"))
         for cell in notebook["cells"]:

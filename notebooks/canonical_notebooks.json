@@ -1,10 +1,33 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
+  "policy_version": "commguard-notebook-policy-v2",
   "canonical_notebooks": [
-    "commguard_calibration_v3.ipynb",
-    "commguard_benign_corpus_v2.ipynb",
-    "commguard_detector_evaluation_v2.ipynb",
-    "commguard_adversarial_redteam_v1.ipynb"
+    {
+      "order": 1,
+      "filename": "commguard_calibration_v3.ipynb",
+      "role": "calibrate dual-T4 telemetry support and accepted payload sensitivity"
+    },
+    {
+      "order": 2,
+      "filename": "commguard_benign_corpus_v2.ipynb",
+      "role": "collect a duration-valid, resumable benign workload corpus"
+    },
+    {
+      "order": 3,
+      "filename": "commguard_detector_evaluation_v2.ipynb",
+      "role": "evaluate grouped communication-only and auxiliary detector baselines"
+    },
+    {
+      "order": 4,
+      "filename": "commguard_adversarial_redteam_v1.ipynb",
+      "role": "evaluate bounded periodic-synchronization training with a sealed holdout"
+    }
+  ],
+  "diagnostic_notebooks": [
+    {
+      "filename": "diagnostics/commguard_calibration_v4_sampling_study.ipynb",
+      "role": "diagnostic sampling-resolution study; never a canonical calibration gate"
+    }
   ],
   "executed_name_pattern": "commguard-*.ipynb",
   "policy_document": "../docs/notebook-policy.md"
