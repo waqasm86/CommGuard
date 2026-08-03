@@ -15,7 +15,7 @@ multi-node validation remain pending actual Kaggle execution.
 The shared scope declaration will be authoritative in SDK metadata and reused
 verbatim in README, notebooks, reports, and handoff material:
 
-> CommGuard's Kaggle workflow is a single-node, dual-NVIDIA-T4 research
+> CommGuard’s Kaggle workflow is a single-node, dual-NVIDIA-T4 research
 > prototype. It validates experimental methodology and software behavior on
 > two local GPU ranks. It does not establish generalization to two physical
 > 8-GPU nodes, NVLink/NVSwitch fabrics, RoCE or InfiniBand networks, large
@@ -43,40 +43,56 @@ verbatim in README, notebooks, reports, and handoff material:
   training run; calibration-v3 failed its idle gate because of the historical
   dispatch defect. Code readiness is not empirical validation.
 
-## Exact files currently expected to change
+## Exact completed file set
 
-This list is authoritative for the first implementation pass and will be
-updated before staging if the audit identifies a narrower or additional file.
+The completed branch changes these files relative to the recorded base. This
+supersedes the narrower provisional list from the first implementation pass.
 
-- Planning/delivery: this plan,
-  `CODEX_KAGGLE_PROTOTYPE_COMPLETION_REPORT.md`,
-  `delivery/KAGGLE_PROTOTYPE_HANDOFF.md`, and
-  `delivery/KAGGLE_PROTOTYPE_PR_BODY.md`.
-- Scope/provenance/artifacts: `src/commguard/scope.py`,
-  `src/commguard/provenance.py`, `src/commguard/schemas.py`,
-  `src/commguard/artifacts/models.py`, `src/commguard/artifacts/storage.py`,
-  and their focused tests.
-- Telemetry/calibration: `src/commguard/telemetry/schema.py`,
-  `src/commguard/telemetry/nvml.py`, `src/commguard/calibration.py`,
-  `src/commguard/duration.py`, and focused telemetry/calibration tests.
-- Corpus/features/evaluation/adversarial/central only where the gap audit
-  demonstrates a missing acceptance criterion: existing modules under
-  `src/commguard/{corpus.py,features/,evaluation/,adversarial.py,central/}` and
-  corresponding tests.
-- CLI/delivery: `src/commguard/cli.py`, `tools/verify_delivery.py`,
-  `.gitignore`, and focused CLI/repository/artifact tests.
-- Notebooks: `tools/generate_canonical_notebooks.py`,
-  `notebooks/canonical_notebooks.json`, the four canonical notebooks, and
+- Planning, publication, and delivery: this plan, `.gitignore`,
+  `CODEX_KAGGLE_PROTOTYPE_COMPLETION_REPORT.md`, `CODEX_COMPLETION_REPORT.md`,
+  `delivery/HANDOFF.md`, `delivery/KAGGLE_PROTOTYPE_HANDOFF.md`,
+  `delivery/KAGGLE_PROTOTYPE_PR_BODY.md`, `delivery/PR_BODY.md`, and
+  `delivery/RELEASE_NOTES.md`.
+- Package metadata and overview: `pyproject.toml`, `README.md`, and
+  `CHANGELOG.md`.
+- SDK: `src/commguard/__init__.py`, `src/commguard/adversarial.py`,
+  `src/commguard/calibration.py`, `src/commguard/cli.py`,
+  `src/commguard/orchestrator.py`, `src/commguard/provenance.py`,
+  `src/commguard/schemas.py`, `src/commguard/scope.py`,
+  `src/commguard/workloads.py`, `src/commguard/artifacts/{__init__.py,prototype.py,storage.py}`,
+  `src/commguard/central/{agent.py,security.py,server.py}`,
+  `src/commguard/distributed/worker.py`,
+  `src/commguard/environment/preflight.py`,
+  `src/commguard/evaluation/{__init__.py,baselines.py,splits.py}`,
+  `src/commguard/features/extraction.py`, and
+  `src/commguard/telemetry/{__init__.py,nvml.py,schema.py}`.
+- Notebook tooling and registry: `tools/generate_canonical_notebooks.py`,
+  `tools/verify_delivery.py`, `notebooks/canonical_notebooks.json`, the four
+  registered canonical notebooks, and
   `notebooks/diagnostics/commguard_calibration_v4_sampling_study.ipynb`.
-  Superseded sources will be removed only after provenance and immutable
-  historical equivalents are verified.
-- Documentation: `README.md`, `CHANGELOG.md`,
-  `docs/KAGGLE_PROTOTYPE_RUNBOOK.md`, `docs/current-results.md`,
-  `docs/acceptance-status.md`, `docs/evidence-index.md`,
-  `docs/limitations.md`, `docs/methodology.md`, `docs/kaggle-dual-t4.md`,
-  `docs/NEXT_KAGGLE_EXPERIMENTS.md`,
-  `docs/central-monitoring-design.md`, `docs/adversarial-research.md`,
-  `docs/reproducibility.md`, `docs/notebook-policy.md`, and
+- Superseded active notebook sources removed after provenance review:
+  `notebooks/commguard_benign_corpus.ipynb`,
+  `notebooks/commguard_calibration_v2.ipynb`,
+  `notebooks/commguard_detector_evaluation.ipynb`,
+  `notebooks/commguard_dual_t4.ipynb`, and
+  `notebooks/commguard_dual_t4_research.ipynb`.
+- Tests: `tests/test_artifacts.py`, `tests/test_benign_matrix.py`,
+  `tests/test_calibration_provenance.py`,
+  `tests/test_calibration_repeatability.py`,
+  `tests/test_central_monitoring.py`, `tests/test_cli.py`,
+  `tests/test_coverage.py`, `tests/test_evaluation_grouping.py`,
+  `tests/test_feature_extraction.py`, `tests/test_features.py`,
+  `tests/test_gpu_integration.py`, `tests/test_prototype_packages.py`,
+  `tests/test_repository.py`, `tests/test_schemas.py`, `tests/test_scope.py`,
+  and `tests/test_telemetry.py`.
+- Documentation and report: `docs/KAGGLE_PROTOTYPE_RUNBOOK.md`,
+  `docs/NEXT_KAGGLE_EXPERIMENTS.md`, `docs/acceptance-status.md`,
+  `docs/adversarial-research.md`, `docs/artifact-schemas.md`,
+  `docs/benign-workload-matrix.md`, `docs/central-monitoring-design.md`,
+  `docs/current-results.md`, `docs/evidence-index.md`,
+  `docs/kaggle-dual-t4.md`, `docs/limitations.md`, `docs/methodology.md`,
+  `docs/notebook-policy.md`, `docs/nvidia-calibration.md`,
+  `docs/reproducibility.md`, and
   `reports/commguard-kaggle-prototype-report.md`.
 
 ## Notebook migration strategy
@@ -144,17 +160,20 @@ updated before staging if the audit identifies a narrower or additional file.
   central, adversarial, reproducibility, notebook-policy, README, completion,
   and handoff documents without upgrading historical evidence.
 
-## Commit plan
+## Commit plan and actual commits
 
-1. Organize canonical notebook sources and preserve/hash evidence.
-2. Add shared prototype scope and close demonstrated SDK/artifact gaps.
-3. Harden canonical notebook generation and its policy tests.
-4. Add Kaggle runbook, report, and reconciled research documentation.
-5. Add final completion/handoff/PR materials and recorded validation.
+1. `9708d2e` — organize canonical Kaggle notebook workflow and preserve/hash
+   evidence.
+2. `4f60a08` — complete the calibration, corpus, features, grouped evaluation,
+   bounded red-team, collector, artifact, CLI, and notebook SDK workflows.
+3. `9401ac4` — add the Kaggle runbook, report, reconciled documentation,
+   handoff, and draft PR body.
+4. Final report-only commit — record the completion report and final living-plan
+   state, rerun the repository gate, push, and verify local/remote equality.
 
-Commits will be split further only when the actual diff has an independently
-reviewable dependency boundary. Every commit receives the repository-required
-test/lint/format/build gate. No history rewrite or force-push is allowed.
+Every implementation/documentation commit received the repository-required
+test/lint/format/build gate. No history was rewritten and no force-push was
+used.
 
 ## Known limitations
 
@@ -171,22 +190,24 @@ test/lint/format/build gate. No history rewrite or force-push is allowed.
 
 ## Final acceptance checklist
 
-- [ ] Dirty baseline and all evidence hashes recorded; evidence unchanged.
-- [ ] Four canonical notebooks plus one diagnostic source are the only active
+- [x] Dirty baseline and all evidence hashes recorded; evidence unchanged.
+- [x] Four canonical notebooks plus one diagnostic source are the only active
       workflow notebooks; all canonical cells are unexecuted.
-- [ ] Notebook manifest has exact roles, order, and policy version.
-- [ ] Shared scope declaration and structured fields are used throughout.
-- [ ] Demonstrated SDK gaps are implemented with focused tests.
-- [ ] CPU/unit suite passes; GPU skips are explained.
-- [ ] Ruff check and format-check pass.
-- [ ] Wheel and sdist build pass and contain no forbidden evidence.
-- [ ] Delivery, secret/path, notebook, archive, and diff audits pass.
-- [ ] Kaggle runbook, research report, completion report, handoff, and PR body
+- [x] Notebook manifest has exact roles, order, and policy version.
+- [x] Shared scope declaration and structured fields are used throughout.
+- [x] Demonstrated SDK gaps are implemented with focused tests.
+- [x] CPU/unit suite passes; GPU skips are explained.
+- [x] Ruff check and format-check pass.
+- [x] Wheel and sdist build pass and contain no forbidden evidence.
+- [x] Delivery, secret/path, notebook, archive, and diff audits pass.
+- [x] Kaggle runbook, research report, completion report, handoff, and PR body
       are complete and distinguish code readiness from empirical validation.
-- [ ] Logical commits are pushed to
+- [x] Logical implementation commits are pushed to
       `origin/codex/commguard-kaggle-prototype-completion`.
-- [ ] Draft PR to `main` is open.
-- [ ] Local and remote branch SHAs match and the working tree is clean.
+- [x] Draft PR to `main` is open at
+      `https://github.com/waqasm86/CommGuard/pull/3`.
+- [ ] Final report commit is pushed; local and remote branch SHAs match and the
+      working tree is clean.
 
 ## Progress log
 
@@ -217,4 +238,11 @@ test/lint/format/build gate. No history rewrite or force-push is allowed.
 - [x] `2026-08-04` Added the Kaggle runbook, research report skeleton, scope and
   evidence reconciliation, workload labels, handoff, and draft PR text without
   adding empirical claims.
-- [ ] Complete final validation, commits, push, and draft PR.
+- [x] `2026-08-04` Ran the final requested suite: system Python reported 182
+  passed and eight optional/hardware skips; the declared-extra venv reported
+  185 passed and five strict dual-T4 skips; Ruff check/format, wheel/sdist
+  build, canonical generation check, delivery verification, notebook audit,
+  package-content inspection, and immutable-evidence hash audit all passed.
+- [x] `2026-08-04` Published three logical commits and opened draft PR #3.
+- [ ] Commit and publish this final report/plan update, then verify the exact
+  branch-tip SHA and clean worktree.
