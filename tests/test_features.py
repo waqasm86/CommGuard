@@ -31,6 +31,7 @@ def telemetry() -> list[dict]:
                     wall_time_utc=(origin + timedelta(seconds=sequence)).isoformat(),
                     monotonic_ns=sequence * 1_000_000_000,
                     fields=fields,
+                    schema_version=LEGACY_SCHEMA_VERSION,
                 ).to_dict()
             )
     return records

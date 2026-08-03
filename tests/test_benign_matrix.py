@@ -77,7 +77,7 @@ def test_registry_config_ids_are_explicit_and_unique() -> None:
     config_ids = [str(config["config_id"]) for config in workloads.values()]
 
     assert len(config_ids) == len(set(config_ids))
-    assert all(config_id.endswith("-v1") for config_id in config_ids)
+    assert all(config_id.rsplit("-v", 1)[-1].isdigit() for config_id in config_ids)
 
 
 def test_plan_rejects_non_positive_repetition_count() -> None:

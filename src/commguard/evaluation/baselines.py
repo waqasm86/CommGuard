@@ -47,6 +47,8 @@ def _metrics(y_true: Any, y_pred: Any, probabilities: Any | None = None) -> dict
         ),
         "precision": float(precision_score(y_true, y_pred, zero_division=0)),
         "recall": float(recall_score(y_true, y_pred, zero_division=0)),
+        "training_recall": tp / (tp + fn) if tp + fn else None,
+        "inference_recall": tn / (tn + fp) if tn + fp else None,
         "f1": float(f1_score(y_true, y_pred, zero_division=0)),
         "false_positive_rate": fp / (fp + tn) if fp + tn else None,
         "false_negative_rate": fn / (fn + tp) if fn + tp else None,
@@ -170,15 +172,23 @@ def _stable_sigmoid(raw_logits: Any) -> Any:
 
 
 def _simple_rule(
-    train: Any, evaluation: Any, columns: list[str]
+    train: Any,
+    evaluation: Any,
+    columns: list[str],
+    *,
+    duty_cycle: bool = False,
 ) -> tuple[Any, Any, dict[str, Any]]:
     import numpy as np
 
-    candidates = [
-        column
-        for column in columns
-        if "pcie_total_mean" in column or ("pcie_" in column and column.endswith("__mean"))
-    ]
+    candidates = (
+        [column for column in columns if "pcie_total__communication_duty_cycle" in column]
+        if duty_cycle
+        else [
+            column
+            for column in columns
+            if "pcie_total_mean" in column or "pcie_total__mean" in column
+        ]
+    )
     if not candidates:
         candidates = columns[:1]
     signal = train[candidates].mean(axis=1, skipna=True)
@@ -198,6 +208,11 @@ def _simple_rule(
         predictions,
         probabilities,
         {
+            "rule_name": (
+                "communication_duty_cycle_threshold"
+                if duty_cycle
+                else "mean_communication_threshold"
+            ),
             "columns": candidates,
             "threshold": threshold,
             "direction": "higher_is_training" if direction == 1 else "lower_is_training",
@@ -220,6 +235,7 @@ def _evaluate_ablation(
     from sklearn.linear_model import LogisticRegression
     from sklearn.pipeline import make_pipeline
     from sklearn.preprocessing import StandardScaler
+    from sklearn.tree import DecisionTreeClassifier
 
     split = frame["run_id"].map(assignments)
     train = frame.loc[split == "train"].copy()
@@ -246,6 +262,16 @@ def _evaluate_ablation(
             VarianceThreshold(),
             StandardScaler(),
             LogisticRegression(class_weight="balanced", max_iter=2000, random_state=20260730),
+        ),
+        "shallow_decision_tree": make_pipeline(
+            SimpleImputer(strategy="median"),
+            VarianceThreshold(),
+            DecisionTreeClassifier(
+                max_depth=3,
+                min_samples_leaf=2,
+                class_weight="balanced",
+                random_state=20260730,
+            ),
         ),
         "random_forest": make_pipeline(
             SimpleImputer(strategy="median"),
@@ -285,21 +311,31 @@ def _evaluate_ablation(
         }
         validation_probability_by_model[name] = validation_probability
         test_probability_by_model[name] = test_probability
-    validation_simple_prediction, validation_simple_probability, rule = _simple_rule(
-        train, validation, selected_columns
-    )
-    test_simple_prediction, test_simple_probability, _ = _simple_rule(train, test, selected_columns)
-    candidate_results["simple_rule"] = {
-        "validation": _metrics(
-            y_validation.to_numpy(),
-            validation_simple_prediction,
-            validation_simple_probability,
-        ),
-        "test": _metrics(y_test.to_numpy(), test_simple_prediction, test_simple_probability),
-        "rule_fitted_on_train": rule,
-    }
-    validation_probability_by_model["simple_rule"] = validation_simple_probability
-    test_probability_by_model["simple_rule"] = test_simple_probability
+    for rule_name, duty_cycle in (
+        ("mean_communication_threshold", False),
+        ("communication_duty_cycle_threshold", True),
+    ):
+        validation_prediction, validation_probability, rule = _simple_rule(
+            train,
+            validation,
+            selected_columns,
+            duty_cycle=duty_cycle,
+        )
+        test_prediction, test_probability, _ = _simple_rule(
+            train,
+            test,
+            selected_columns,
+            duty_cycle=duty_cycle,
+        )
+        candidate_results[rule_name] = {
+            "validation": _metrics(
+                y_validation.to_numpy(), validation_prediction, validation_probability
+            ),
+            "test": _metrics(y_test.to_numpy(), test_prediction, test_probability),
+            "rule_fitted_on_train": rule,
+        }
+        validation_probability_by_model[rule_name] = validation_probability
+        test_probability_by_model[rule_name] = test_probability
     best_name, selected_threshold, validation_selection_scores = _select_model_and_threshold(
         [int(value) for value in y_validation],
         {
@@ -352,6 +388,7 @@ def _evaluate_ablation(
         "lower_threshold": lower,
         "upper_threshold": upper,
         "coverage": float(decided.mean()),
+        "abstention_rate": float(1.0 - decided.mean()),
         "selective_risk": (
             float((abstained_prediction != y_test.to_numpy()[decided]).mean())
             if decided.any()
@@ -370,6 +407,15 @@ def _evaluate_ablation(
             test_probability[mask],
         )
     output["per_family"] = per_family
+    per_session: dict[str, Any] = {}
+    for session_id in sorted(test["experiment_session_id"].unique()):
+        mask = test["experiment_session_id"].to_numpy() == session_id
+        per_session[str(session_id)] = _metrics(
+            y_test.to_numpy()[mask],
+            best_prediction[mask],
+            test_probability[mask],
+        )
+    output["per_session"] = per_session
     run_probabilities: dict[str, list[float]] = defaultdict(list)
     run_targets: dict[str, int] = {}
     for run_id, probability, target in zip(test["run_id"], test_probability, y_test, strict=True):
@@ -394,7 +440,89 @@ def _evaluate_ablation(
         run_targets,
         prediction_by_run,
     )
+    output["run_predictions"] = [
+        {
+            "run_id": run_id,
+            "target": run_targets[run_id],
+            "predicted": prediction_by_run[run_id],
+            "score": probability,
+            "abstained": lower <= probability <= upper,
+        }
+        for run_id, probability in zip(run_ids, run_probability, strict=True)
+    ]
     return output
+
+
+def _evaluate_multiclass_diagnostic(
+    frame: Any,
+    assignments: dict[str, str],
+    columns: list[str],
+) -> dict[str, Any]:
+    """Evaluate training/inference/control with a shallow interpretable tree."""
+    from sklearn.feature_selection import VarianceThreshold
+    from sklearn.impute import SimpleImputer
+    from sklearn.metrics import (
+        balanced_accuracy_score,
+        confusion_matrix,
+        precision_recall_fscore_support,
+    )
+    from sklearn.pipeline import make_pipeline
+    from sklearn.tree import DecisionTreeClassifier
+
+    split = frame["run_id"].map(assignments)
+    train = frame.loc[split == "train"].copy()
+    test = frame.loc[split == "test"].copy()
+    labels = ("training", "inference", "control")
+    if set(train["target_label"]) != set(labels) or set(test["target_label"]) != set(labels):
+        raise ValueError("secondary multiclass partitions require training, inference, and control")
+    selected_columns = [column for column in columns if train[column].notna().any()]
+    if not selected_columns:
+        raise ValueError("secondary multiclass training features are entirely missing")
+    model = make_pipeline(
+        SimpleImputer(strategy="median"),
+        VarianceThreshold(),
+        DecisionTreeClassifier(
+            max_depth=3,
+            min_samples_leaf=2,
+            class_weight="balanced",
+            random_state=20260730,
+        ),
+    )
+    model.fit(train[selected_columns], train["target_label"])
+    predicted = model.predict(test[selected_columns])
+    precision, recall, f1, support = precision_recall_fscore_support(
+        test["target_label"],
+        predicted,
+        labels=list(labels),
+        zero_division=0,
+    )
+    return {
+        "task": "training_vs_inference_vs_control",
+        "diagnostic_only": True,
+        "model": "shallow_decision_tree",
+        "feature_set": "communication_plus_auxiliary",
+        "unit_of_split": "whole_run",
+        "labels": list(labels),
+        "balanced_accuracy": float(balanced_accuracy_score(test["target_label"], predicted)),
+        "macro_precision": float(sum(precision) / len(precision)),
+        "macro_recall": float(sum(recall) / len(recall)),
+        "macro_f1": float(sum(f1) / len(f1)),
+        "confusion_matrix": confusion_matrix(
+            test["target_label"], predicted, labels=list(labels)
+        ).tolist(),
+        "per_class": {
+            label: {
+                "precision": float(precision[index]),
+                "recall": float(recall[index]),
+                "f1": float(f1[index]),
+                "support": int(support[index]),
+            }
+            for index, label in enumerate(labels)
+        },
+        "test_run_count": int(test["run_id"].nunique()),
+        "test_window_count": len(test),
+        "feature_columns": selected_columns,
+    }
 
 
 def _adversarial_outcome_summary(
@@ -542,6 +670,37 @@ def _heldout_adversarial_families(
                 threshold,
                 run_count=int(family_frame["run_id"].nunique()),
             ),
+            "by_configuration": {
+                str(config_id): {
+                    **_adversarial_outcome_summary(
+                        next(iter(target_labels)),
+                        [
+                            float(value)
+                            for value in model.predict_proba(config_frame[selected_columns])[
+                                :, list(model.classes_).index(1)
+                            ]
+                        ],
+                        threshold,
+                        run_count=int(config_frame["run_id"].nunique()),
+                    ),
+                    "run_ids": sorted(str(value) for value in config_frame["run_id"].unique()),
+                    "predicted_label": (
+                        "training"
+                        if float(
+                            model.predict_proba(config_frame[selected_columns])[
+                                :, list(model.classes_).index(1)
+                            ].mean()
+                        )
+                        >= threshold
+                        else "nontraining"
+                    ),
+                    "abstention": False,
+                }
+                for config_id in sorted(family_frame["workload_config_id"].unique())
+                for config_frame in [
+                    family_frame.loc[family_frame["workload_config_id"] == config_id]
+                ]
+            },
         }
     return output
 
@@ -728,7 +887,13 @@ def evaluate_detector(
     feature_paths = sorted((root / "features").glob("features-*.jsonl"))
     frame = pd.DataFrame(rows)
     frame["_target"] = (frame["target_label"] == "training").astype(int)
-    primary_frame = pd.DataFrame(benign_primary_rows)
+    primary_frame = pd.DataFrame(
+        [row for row in benign_primary_rows if row.get("target_label") in {"training", "inference"}]
+    )
+    control_frame = pd.DataFrame(
+        [row for row in benign_primary_rows if row.get("target_label") == "control"]
+    )
+    secondary_frame = pd.DataFrame(benign_primary_rows)
     adversarial_frame = pd.DataFrame(adversarial_primary_rows)
     if not primary_frame.empty:
         primary_frame["_target"] = (primary_frame["target_label"] == "training").astype(int)
@@ -738,15 +903,16 @@ def evaluate_detector(
         raise ValueError("primary 30-second feature frame is empty after coverage passed")
     primary_rows = primary_frame.to_dict("records")
     columns = numeric_feature_columns(primary_rows)
-    split_plan = make_split_plan(primary_rows, required_families=required_families)
+    primary_families = tuple(sorted({str(row["workload_family"]) for row in primary_rows}))
+    split_plan = make_split_plan(primary_rows, required_families=primary_families)
     assignments = split_plan.assignments
     leakage = audit_leakage(primary_rows, columns, assignments)
     if not leakage["passed"]:
         raise ValueError(f"leakage audit failed: {leakage}")
     ablations = {
         "communication_only": [column for column in columns if "pcie_" in column],
-        "non_pcie_nvml": [column for column in columns if "pcie_" not in column],
-        "combined": columns,
+        "auxiliary_only": [column for column in columns if "pcie_" not in column],
+        "communication_plus_auxiliary": columns,
     }
     empty = [name for name, selected in ablations.items() if not selected]
     if empty:
@@ -761,6 +927,16 @@ def evaluate_detector(
         for name, selected in ablations.items()
         if name != "communication_only"
     }
+    secondary_families = tuple(sorted({str(row["workload_family"]) for row in benign_primary_rows}))
+    secondary_split_plan = make_split_plan(
+        benign_primary_rows,
+        required_families=secondary_families,
+    )
+    secondary_multiclass = _evaluate_multiclass_diagnostic(
+        secondary_frame,
+        secondary_split_plan.assignments,
+        ablations["communication_plus_auxiliary"],
+    )
     by_window_seconds: dict[str, Any] = {}
     benign_frame = frame.loc[frame["designation"] == "benign"]
     for window_seconds in sorted(benign_frame["window_seconds"].unique()):
@@ -788,6 +964,19 @@ def evaluate_detector(
             "feature_columns": ablations["communication_only"],
             "metrics": primary_communication,
             "hard_negative_false_positive_rates": hard_negatives,
+        },
+        "task_definition": "training_vs_inference",
+        "control_handling": {
+            "excluded_from_primary_binary_task": True,
+            "control_run_count": (
+                int(control_frame["run_id"].nunique()) if not control_frame.empty else 0
+            ),
+            "control_window_count": len(control_frame),
+            "status": "reported_separately_not_labeled_as_inference",
+        },
+        "secondary_multiclass": {
+            **secondary_multiclass,
+            "split_plan": secondary_split_plan.to_dict(),
         },
         "unit_of_split": "whole run",
         "actual_split_strategy": split_plan.actual_strategy,
@@ -851,7 +1040,7 @@ def evaluate_detector(
             primary_frame,
             adversarial_frame,
             assignments,
-            ablations["combined"],
+            ablations["communication_plus_auxiliary"],
             adversarial_holdout_plan,
             release_final_holdout=release_final_adversarial_holdout,
         ),

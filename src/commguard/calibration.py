@@ -19,8 +19,8 @@ from commguard.schemas import (
     validate_artifact,
 )
 
-STANDARD_CALIBRATION_PAYLOAD_MIB = (1, 4, 16, 64)
-STANDARD_CALIBRATION_REPETITIONS = 3
+STANDARD_CALIBRATION_PAYLOAD_MIB = (1, 4, 16, 64, 128)
+STANDARD_CALIBRATION_REPETITIONS = 5
 CALIBRATION_REFERENCE_FIELDS = (
     "calibration_artifact_path",
     "calibration_sha256",
@@ -124,6 +124,9 @@ def analyze_calibration(
     minimum_capture_rate: float = 0.8,
     baseline_multiplier: float = 3.0,
     baseline_floor_bytes_per_s: float = 1_000_000.0,
+    threshold_method: str = "median_plus_mad",
+    minimum_measured_duration_s: float | None = None,
+    maximum_interval_relative_error: float | None = None,
     *,
     legacy_compatibility: bool = False,
 ) -> dict[str, Any]:
@@ -135,7 +138,13 @@ def analyze_calibration(
     the modern capture gate passed.
     """
     if minimum_repetitions is None:
-        minimum_repetitions = 1 if legacy_compatibility else STANDARD_CALIBRATION_REPETITIONS
+        minimum_repetitions = 1 if legacy_compatibility else 3
+    if threshold_method not in {"median_plus_mad", "median_multiplier"}:
+        raise ValueError("threshold_method must be median_plus_mad or median_multiplier")
+    if minimum_measured_duration_s is not None and minimum_measured_duration_s <= 0:
+        raise ValueError("minimum_measured_duration_s must be positive when supplied")
+    if maximum_interval_relative_error is not None and not 0 <= maximum_interval_relative_error < 1:
+        raise ValueError("maximum_interval_relative_error must be in [0, 1)")
     _validate_thresholds(
         minimum_sizes,
         minimum_rank_correlation,
@@ -158,25 +167,48 @@ def analyze_calibration(
         row["observation_type"] = observation_type
         row["is_idle"] = observation_type == "idle_baseline"
         rows.append(row)
+
+    def scientifically_usable(row: dict[str, Any]) -> bool:
+        if not row.get("participation_valid"):
+            return False
+        if row.get("exit_status") not in {None, "completed"}:
+            return False
+        if minimum_measured_duration_s is not None:
+            duration = _nonnegative_number(row.get("measured_duration_seconds"))
+            if duration is None or duration < minimum_measured_duration_s:
+                return False
+        if maximum_interval_relative_error is not None:
+            diagnostics = row.get("collector_diagnostics")
+            if not isinstance(diagnostics, dict):
+                return False
+            target = _nonnegative_number(diagnostics.get("requested_interval_s"))
+            actual = _nonnegative_number(diagnostics.get("mean_interval_s"))
+            if target is None or target == 0 or actual is None:
+                return False
+            if abs(actual - target) / target > maximum_interval_relative_error:
+                return False
+        return True
+
     idle_rows = [row for row in rows if row.get("observation_type") == "idle_baseline"]
     idle_signals = [
         signal
         for row in idle_rows
         if row.get("pcie_supported")
-        and row.get("participation_valid")
+        and scientifically_usable(row)
         and (signal := _nonnegative_number(row.get("pcie_total_mean_bytes_per_s"))) is not None
     ]
     idle_median = statistics.median(idle_signals) if idle_signals else None
+    idle_mad = _median_absolute_deviation(idle_signals) if idle_signals else None
     idle_baseline_complete = len(idle_signals) >= minimum_repetitions
     capture_gate_applied = idle_median is not None and not legacy_compatibility
-    capture_threshold = (
-        max(
-            idle_median * baseline_multiplier,
-            idle_median + baseline_floor_bytes_per_s,
+    capture_threshold = None
+    if idle_median is not None:
+        threshold_delta = (
+            baseline_multiplier * float(idle_mad or 0.0)
+            if threshold_method == "median_plus_mad"
+            else idle_median * max(0.0, baseline_multiplier - 1.0)
         )
-        if idle_median is not None
-        else None
-    )
+        capture_threshold = idle_median + max(threshold_delta, baseline_floor_bytes_per_s)
 
     grouped: dict[float, list[dict[str, Any]]] = defaultdict(list)
     invalid_payload_count = 0
@@ -199,7 +231,7 @@ def analyze_calibration(
         for row in repetitions:
             if not row.get("pcie_supported"):
                 continue
-            if not row.get("participation_valid"):
+            if not scientifically_usable(row):
                 invalid_participation_count += 1
                 continue
             signal = _nonnegative_number(row.get("pcie_total_mean_bytes_per_s"))
@@ -272,6 +304,29 @@ def analyze_calibration(
     ]
     unsupported_count = sum(not bool(row.get("pcie_supported")) for row in rows)
     invalid_idle_count = len(idle_rows) - len(idle_signals)
+    short_duration_count = 0
+    invalid_interval_count = 0
+    if minimum_measured_duration_s is not None:
+        short_duration_count = sum(
+            (_nonnegative_number(row.get("measured_duration_seconds")) or 0)
+            < minimum_measured_duration_s
+            for row in rows
+        )
+    if maximum_interval_relative_error is not None:
+        for row in rows:
+            diagnostics = row.get("collector_diagnostics")
+            if not isinstance(diagnostics, dict):
+                invalid_interval_count += 1
+                continue
+            target = _nonnegative_number(diagnostics.get("requested_interval_s"))
+            actual = _nonnegative_number(diagnostics.get("mean_interval_s"))
+            if (
+                target is None
+                or target == 0
+                or actual is None
+                or abs(actual - target) / target > maximum_interval_relative_error
+            ):
+                invalid_interval_count += 1
 
     reasons: list[str] = []
     if not rows:
@@ -303,6 +358,16 @@ def analyze_calibration(
         reasons.append(f"{invalid_participation_count} observations had invalid rank participation")
     if invalid_signal_count:
         reasons.append(f"{invalid_signal_count} supported observations had no usable PCIe reading")
+    if short_duration_count:
+        reasons.append(
+            f"{short_duration_count} observations were shorter than "
+            f"{minimum_measured_duration_s:g} measured seconds"
+        )
+    if invalid_interval_count:
+        reasons.append(
+            f"{invalid_interval_count} observations exceeded the configured collector interval "
+            "tolerance or lacked interval evidence"
+        )
     if len(usable_summaries) < minimum_sizes:
         reasons.append(
             f"only {len(usable_summaries)} usable payload sizes; "
@@ -339,6 +404,20 @@ def analyze_calibration(
         status = "partially_supported"
     else:
         status = "supported"
+    unexpected_worker_failures = sum(
+        row.get("exit_status") in {"failed", "timeout"} or row.get("participation_valid") is False
+        for row in rows
+    )
+    if status in {"supported", "partially_supported"}:
+        result_state = status
+    elif not rows or invalid_observation_type_count or unexpected_worker_failures:
+        result_state = "failed"
+    elif unsupported_count and not usable_summaries:
+        result_state = "not_supported"
+    elif short_duration_count or invalid_interval_count:
+        result_state = "inconclusive"
+    else:
+        result_state = "inconclusive"
 
     limitations = [
         "Nominal payload bytes are not observed PCIe bytes.",
@@ -376,10 +455,12 @@ def analyze_calibration(
             else "failed"
         ),
         "status": status,
+        "result_state": result_state,
         "signal_name": "NVML PCIe traffic readings",
         "observations": sorted(rows, key=_observation_sort_key),
         "payload_summaries": payload_summaries,
         "idle_baseline_median_bytes_per_s": idle_median,
+        "idle_baseline_mad_bytes_per_s": idle_mad,
         "idle_baseline_repetitions": len(idle_rows),
         "idle_baseline_usable_repetitions": len(idle_signals),
         "idle_baseline_complete": idle_baseline_complete,
@@ -408,6 +489,9 @@ def analyze_calibration(
             "minimum_capture_rate": minimum_capture_rate,
             "baseline_multiplier": baseline_multiplier,
             "baseline_floor_bytes_per_s": baseline_floor_bytes_per_s,
+            "threshold_method": threshold_method,
+            "minimum_measured_duration_s": minimum_measured_duration_s,
+            "maximum_interval_relative_error": maximum_interval_relative_error,
         },
         "falsification_reasons": reasons,
         "claim": (
@@ -558,7 +642,7 @@ def validate_standard_calibration_result(
     artifact_root: str | Path,
     result: dict[str, Any],
 ) -> dict[str, Any]:
-    """Verify one complete 3 × (idle + four-payload) calibration evidence matrix."""
+    """Verify one complete 5 × (idle + five-payload) calibration evidence matrix."""
     from commguard.workloads import calibration_workload_name
 
     root = Path(artifact_root).resolve()

@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "policy_version": "commguard-notebook-policy-v2",
+  "policy_version": "commguard-notebook-policy-v3",
   "canonical_notebooks": [
     {
       "order": 1,

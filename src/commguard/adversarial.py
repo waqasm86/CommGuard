@@ -110,7 +110,7 @@ ADVERSARIAL_STRATEGIES: dict[str, AdversarialStrategy] = {
         worker_mode="sparse_sync_training",
         research_purpose="Measure detector sensitivity to periodic model averaging.",
         synchronization_semantics="Average model parameters after a fixed number of local steps.",
-        parameter_bounds={"local_steps": ParameterBound(2, 100)},
+        parameter_bounds={"local_steps": ParameterBound(1, 100)},
         claim_boundary="Single-host two-rank local SGD, not decentralized multi-node validation.",
     ),
     "diloco_inspired": AdversarialStrategy(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import random
@@ -390,10 +391,15 @@ def run_calibration_sweep(
     collective: str = "all_reduce",
     repetitions: int = STANDARD_CALIBRATION_REPETITIONS,
     timeout_s: float = 180.0,
+    sampling_interval_s: float = 0.5,
     provenance: ProvenanceContext | None = None,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
     allow_prior_sweep_evidence: bool = False,
+    development_smoke_only: bool = False,
 ) -> dict[str, Any]:
+    from commguard.telemetry.nvml import validate_sampling_interval
+
+    sampling_interval_s = validate_sampling_interval(sampling_interval_s)
     if repetitions < 1:
         raise ValueError("calibration repetitions must be at least one")
     if not payload_mib or any(payload <= 0 for payload in payload_mib):
@@ -454,6 +460,12 @@ def run_calibration_sweep(
 
     progress("sweep_started", planned_run_count=len(expected_matrix))
 
+    duration_overrides = (
+        {"warmup_seconds": 1.0, "min_measured_seconds": 5.0, "cooldown_seconds": 1.0}
+        if development_smoke_only
+        else {}
+    )
+
     def observe(outcome: dict[str, Any], **identity: Any) -> dict[str, Any]:
         return {
             "run_id": outcome["run_id"],
@@ -463,10 +475,20 @@ def run_calibration_sweep(
             **identity,
             "participation_valid": outcome["manifest"]["participation_valid"],
             "exit_status": outcome["manifest"]["exit_status"],
+            "planned_measured_duration_seconds": outcome["manifest"]["config"].get(
+                "min_measured_seconds"
+            ),
+            "measured_duration_seconds": outcome["manifest"].get("measured_duration_seconds"),
+            "gpu_uuids": sorted(
+                str(gpu.get("uuid"))
+                for gpu in outcome["manifest"].get("environment", {}).get("gpus", [])
+                if gpu.get("uuid")
+            ),
             "pcie_supported": outcome["pcie_supported"],
             "pcie_total_mean_bytes_per_s": outcome["pcie_total_mean_bytes_per_s"],
             "pcie_total_median_bytes_per_s": outcome["pcie_total_median_bytes_per_s"],
             "pcie_sample_count": outcome["pcie_sample_count"],
+            "collector_diagnostics": outcome.get("telemetry_diagnostics"),
         }
 
     for repetition in range(repetitions):
@@ -479,7 +501,11 @@ def run_calibration_sweep(
         idle_outcome = run_experiment(
             "calibration_idle",
             output=output,
-            overrides={"repetition": repetition},
+            overrides={
+                "repetition": repetition,
+                "sampling_interval_s": sampling_interval_s,
+                **duration_overrides,
+            },
             timeout_s=timeout_s,
             strict_preflight=True,
             raise_on_failure=False,
@@ -519,6 +545,8 @@ def run_calibration_sweep(
                     "payload_mib": payload,
                     "collective": collective,
                     "repetition": repetition,
+                    "sampling_interval_s": sampling_interval_s,
+                    **duration_overrides,
                 },
                 timeout_s=timeout_s,
                 strict_preflight=True,
@@ -547,7 +575,11 @@ def run_calibration_sweep(
     result = analyze_calibration(
         observations,
         minimum_sizes=len(payload_mib),
-        minimum_repetitions=STANDARD_CALIBRATION_REPETITIONS,
+        minimum_repetitions=(
+            repetitions if development_smoke_only else STANDARD_CALIBRATION_REPETITIONS
+        ),
+        minimum_measured_duration_s=5.0 if development_smoke_only else 30.0,
+        maximum_interval_relative_error=0.2,
     )
     environment = check_environment(strict=True, provenance=context)
     result.update(
@@ -561,6 +593,9 @@ def run_calibration_sweep(
             "session_fingerprint": environment["environment_fingerprint"],
             "source_commit": context.source_commit,
             "source_dirty": context.source_dirty,
+            "target_sampling_interval_s": sampling_interval_s,
+            "development_smoke_only": development_smoke_only,
+            "scientific_acceptance_eligible": not development_smoke_only,
         }
     )
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
@@ -571,7 +606,16 @@ def run_calibration_sweep(
         path,
         current_experiment_session_id=context.experiment_session_id,
     )
-    validation = validate_standard_calibration_result(store.root, result)
+    validation = (
+        {
+            "clean_standard_calibration": False,
+            "development_smoke_only": True,
+            "scientific_acceptance_eligible": False,
+            "planned_run_count": len(expected_matrix),
+        }
+        if development_smoke_only
+        else validate_standard_calibration_result(store.root, result)
+    )
     result["standard_sweep_validation"] = validation
     store.write_json(
         marker_prefix / "completed.json",
@@ -725,6 +769,7 @@ def run_adversarial_matrix(
     repetitions: int = 1,
     timeout_s: float = 180.0,
     provenance: ProvenanceContext | None = None,
+    workload_names: tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     """Collect a bounded adversarial corpus only after benign acceptance and approval."""
     if not adversarial_approval:
@@ -751,7 +796,10 @@ def run_adversarial_matrix(
     context = provenance or ProvenanceContext.create(corpus_id=new_corpus_id("adversarial-matrix"))
     segment_group_id = f"segments-{context.experiment_session_id}"
     plans: list[PlannedRun] = []
-    for workload in adversarial_profile_workloads():
+    selected_workloads = workload_names or tuple(adversarial_profile_workloads())
+    if not selected_workloads or len(selected_workloads) != len(set(selected_workloads)):
+        raise ValueError("adversarial workload_names must be non-empty and unique")
+    for workload in selected_workloads:
         config = get_workload(workload)
         round_name = holdout_plan.round_for(
             family=str(config["family"]),
@@ -903,6 +951,36 @@ def run_adversarial_matrix(
     return summary
 
 
+def run_periodic_synchronization_study(
+    output: str | Path = "artifacts",
+    *,
+    holdout_plan: AdversarialHoldoutPlan,
+    adversarial_approval: bool = False,
+    synchronization_intervals: tuple[int, ...] = (1, 2, 4, 8, 16),
+    repetitions: int = 1,
+    timeout_s: float = 180.0,
+    provenance: ProvenanceContext | None = None,
+) -> dict[str, Any]:
+    """Run the bounded primary red-team study against an already frozen detector."""
+    if synchronization_intervals != (1, 2, 4, 8, 16):
+        raise ValueError("the canonical periodic study requires k=(1, 2, 4, 8, 16)")
+    result = run_adversarial_matrix(
+        output,
+        holdout_plan=holdout_plan,
+        adversarial_approval=adversarial_approval,
+        repetitions=repetitions,
+        timeout_s=timeout_s,
+        provenance=provenance,
+        workload_names=tuple(
+            f"adversarial_periodic_local_sgd_k{interval}" for interval in synchronization_intervals
+        ),
+    )
+    result["study_type"] = "periodic_synchronization_local_update_training"
+    result["synchronization_intervals"] = list(synchronization_intervals)
+    result["bounded_local_research_only"] = True
+    return result
+
+
 def estimate_matrix(profile: str, repetitions: int = 1) -> dict[str, Any]:
     plans = plan_matrix(profile, repetitions)
     seconds = sum(float(plan.config.get("estimated_seconds", 60)) for plan in plans)
@@ -928,7 +1006,7 @@ def plan_matrix(profile: str, repetitions: int = 1) -> tuple[PlannedRun, ...]:
         config = get_workload(name)
         occurrence = occurrences[name]
         occurrences[name] += 1
-        config["workload_name"] = name
+        config.update({"workload_name": name, "repetition": occurrence})
         plans.append(
             PlannedRun(
                 plan_id=f"{profile}-{index:04d}-{name}-{occurrence:03d}",
@@ -1005,30 +1083,76 @@ def run_matrix(
     timeout_s: float = 180.0,
     provenance: ProvenanceContext | None = None,
     prior_calibration_reference: dict[str, Any] | None = None,
+    resume: bool = True,
 ) -> dict[str, Any]:
     """Run a planned benign profile after a session-specific calibration gate."""
     if repetitions is None:
         repetitions = 1 if profile == "smoke" else 3
+    development_smoke_only = profile == "smoke"
     estimate = estimate_matrix(profile, repetitions)
     context = provenance or ProvenanceContext.create(corpus_id=new_corpus_id(f"{profile}-matrix"))
     plans = plan_matrix(profile, repetitions)
     store = ArtifactStore(output)
     store.initialize()
+    existing_summaries = [
+        json.loads(path.read_text(encoding="utf-8"))
+        for path in sorted(store.resolve("results").glob(f"matrix-{profile}-*.json"))
+    ]
+    matching_summaries = [
+        item
+        for item in existing_summaries
+        if item.get("experiment_session_id") == context.experiment_session_id
+        and item.get("corpus_id") == context.corpus_id
+    ]
+    if matching_summaries:
+        if not resume or len(matching_summaries) != 1:
+            raise ArtifactExistsError("an exact matrix summary already exists")
+        return matching_summaries[0]
     plan_manifest = _corpus_manifest(context, plans)
-    plan_path = store.write_json(
-        f"corpora/{context.corpus_id}-plan.json",
-        plan_manifest.to_dict(),
+    plan_relative = Path(f"corpora/{context.corpus_id}-plan.json")
+    plan_path = store.resolve(plan_relative)
+    if plan_path.exists():
+        if not resume:
+            raise ArtifactExistsError(f"corpus plan already exists: {plan_path}")
+        saved_plan = CorpusManifest.from_dict(json.loads(plan_path.read_text(encoding="utf-8")))
+        saved_plan.validate()
+        if saved_plan.to_dict() != plan_manifest.to_dict():
+            raise ArtifactExistsError("existing corpus plan configuration does not match")
+    else:
+        plan_path = store.write_json(plan_relative, plan_manifest.to_dict())
+    sweep_id = f"{context.experiment_session_id}-{context.collection_id}"
+    completed_marker = store.resolve(
+        Path("results/calibration-sweeps") / sweep_id / "completed.json"
     )
-    calibration = run_calibration_sweep(
-        output=output,
-        timeout_s=timeout_s,
-        provenance=context,
-        allow_prior_sweep_evidence=prior_calibration_reference is not None,
-    )
+    if resume and completed_marker.is_file():
+        marker = json.loads(completed_marker.read_text(encoding="utf-8"))
+        calibration_path = store.resolve(str(marker["result_artifact"]))
+        calibration = json.loads(calibration_path.read_text(encoding="utf-8"))
+        calibration.update(
+            {
+                "path": str(calibration_path),
+                "reference": build_calibration_reference(
+                    store.root,
+                    calibration_path,
+                    current_experiment_session_id=context.experiment_session_id,
+                ),
+            }
+        )
+    else:
+        calibration = run_calibration_sweep(
+            output=output,
+            payload_mib=((16,) if development_smoke_only else STANDARD_CALIBRATION_PAYLOAD_MIB),
+            repetitions=(1 if development_smoke_only else STANDARD_CALIBRATION_REPETITIONS),
+            timeout_s=timeout_s,
+            provenance=context,
+            allow_prior_sweep_evidence=prior_calibration_reference is not None,
+            development_smoke_only=development_smoke_only,
+        )
     calibration_reference = dict(calibration["reference"])
     verify_calibration_reference(
         store.root,
         calibration_reference,
+        require_supported=not development_smoke_only,
         expected_experiment_session_ids={context.experiment_session_id},
         expected_environment_fingerprints={
             str(calibration_reference["calibration_environment_fingerprint"])
@@ -1044,7 +1168,11 @@ def run_matrix(
         )
         if prior_calibration_reference["calibration_relationship"] != "prior_session":
             raise CalibrationError("supplied prior calibration must be labeled prior_session")
-    if calibration["status"] != "supported" and not negative_calibration_mode:
+    if (
+        calibration["status"] != "supported"
+        and not negative_calibration_mode
+        and not development_smoke_only
+    ):
         raise CalibrationError(
             f"benign matrix blocked by negative calibration; see {calibration['path']}"
         )
@@ -1052,9 +1180,44 @@ def run_matrix(
     finalized_plans: list[PlannedRun] = []
     for plan in plans:
         name = str(plan.config["workload_name"])
+        planned_hash = hashlib.sha256(
+            json.dumps(plan.config, sort_keys=True, separators=(",", ":"), default=str).encode()
+        ).hexdigest()
+        accepted_matches: list[dict[str, Any]] = []
+        if resume:
+            for manifest_path in sorted(store.resolve("runs").glob("*/manifest.json")):
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                config = dict(manifest.get("config", {}))
+                if config.get("plan_id") != plan.plan_id:
+                    continue
+                if config.get("planned_configuration_hash") != planned_hash:
+                    raise ArtifactExistsError(
+                        f"plan {plan.plan_id} has an existing mismatched attempt"
+                    )
+                if (
+                    manifest.get("exit_status") == "completed"
+                    and manifest.get("participation_valid") is True
+                    and float(manifest.get("measured_duration_seconds") or 0) >= 30.0
+                ):
+                    accepted_matches.append(manifest)
+        if len(accepted_matches) > 1:
+            raise ArtifactExistsError(f"plan {plan.plan_id} has duplicate accepted runs")
+        if accepted_matches:
+            accepted_id = str(accepted_matches[0]["run_id"])
+            outcomes.append({"run_id": accepted_id, "manifest": accepted_matches[0]})
+            finalized_plans.append(replace(plan, accepted_run_id=accepted_id))
+            continue
         outcome = run_experiment(
             name,
             output=output,
+            overrides={
+                "communication_threshold_bytes_per_s": calibration.get(
+                    "capture_threshold_bytes_per_s"
+                ),
+                "plan_id": plan.plan_id,
+                "repetition": int(plan.config["repetition"]),
+                "planned_configuration_hash": planned_hash,
+            },
             timeout_s=timeout_s,
             strict_preflight=True,
             raise_on_failure=False,
@@ -1070,10 +1233,13 @@ def run_matrix(
         tuple(finalized_plans),
         calibration_reference=calibration_reference,
     )
-    final_path = store.write_json(
-        f"corpora/{context.corpus_id}-final.json",
-        final_manifest.to_dict(),
-    )
+    final_relative = Path(f"corpora/{context.corpus_id}-final.json")
+    final_path = store.resolve(final_relative)
+    if final_path.exists():
+        if json.loads(final_path.read_text(encoding="utf-8")) != final_manifest.to_dict():
+            raise ArtifactExistsError("existing final corpus manifest does not match resumed runs")
+    else:
+        final_path = store.write_json(final_relative, final_manifest.to_dict())
     prior_extractions = set((store.root / "features").glob("extraction-*.json"))
     extraction = extract_feature_result(output, final_manifest, output=output)
     new_extractions = set((store.root / "features").glob("extraction-*.json")) - prior_extractions
@@ -1126,6 +1292,8 @@ def run_matrix(
         "feature_extraction_summary": str(extraction_path.relative_to(store.root)),
         "primary_coverage_gate": coverage_gate,
         "detector_metrics_computed": False,
+        "development_smoke_only": development_smoke_only,
+        "scientific_acceptance_eligible": not development_smoke_only,
         "summary_artifact": summary_relative,
     }
     store.write_json(summary_relative, summary)

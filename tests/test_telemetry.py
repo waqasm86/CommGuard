@@ -42,6 +42,11 @@ def test_fake_collector_samples_both_gpus_and_reports_jitter() -> None:
     assert backend.closed
     assert diagnostics.sample_cycles >= 3
     assert {sample.gpu_index for sample in collector.samples} == {0, 1}
+    assert {sample.rank for sample in collector.samples} == {0, 1}
+    assert all(sample.process_id for sample in collector.samples)
+    assert all(sample.target_sampling_interval_s == 0.02 for sample in collector.samples)
+    assert collector.samples[0].raw_unit_metadata["pcie_bytes_multiplier"] == 1024
+    assert "memory_total_bytes" in collector.samples[0].fields
     assert diagnostics.mean_interval_s is not None
     assert diagnostics.field_missing_fraction["power_draw_w"] == 0
 

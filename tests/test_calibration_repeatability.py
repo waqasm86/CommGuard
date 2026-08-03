@@ -49,6 +49,54 @@ def test_repetition_aware_calibration_is_fully_supported() -> None:
     assert not result["falsification_reasons"]
 
 
+def test_short_duration_cannot_be_scientifically_supported() -> None:
+    rows = [row(0, signal, idle=True) for signal in (100_000, 110_000, 120_000)]
+    rows += repeated(1, [2_000_000, 2_100_000, 1_900_000])
+    rows += repeated(4, [3_000_000, 3_100_000, 2_900_000])
+    rows += repeated(16, [8_000_000, 8_100_000, 7_900_000])
+    for observation in rows:
+        observation["exit_status"] = "completed"
+        observation["measured_duration_seconds"] = 29.9
+        observation["collector_diagnostics"] = {
+            "requested_interval_s": 0.5,
+            "mean_interval_s": 0.5,
+        }
+
+    result = analyze_calibration(
+        rows,
+        minimum_measured_duration_s=30.0,
+        maximum_interval_relative_error=0.2,
+    )
+
+    assert result["modern_capture_gate_passed"] is False
+    assert result["result_state"] == "inconclusive"
+    assert "shorter than 30" in " ".join(result["falsification_reasons"])
+
+
+def test_collector_interval_outside_tolerance_is_inconclusive() -> None:
+    rows = [row(0, signal, idle=True) for signal in (100_000, 110_000, 120_000)]
+    rows += repeated(1, [2_000_000, 2_100_000, 1_900_000])
+    rows += repeated(4, [3_000_000, 3_100_000, 2_900_000])
+    rows += repeated(16, [8_000_000, 8_100_000, 7_900_000])
+    for observation in rows:
+        observation["exit_status"] = "completed"
+        observation["measured_duration_seconds"] = 30.0
+        observation["collector_diagnostics"] = {
+            "requested_interval_s": 0.5,
+            "mean_interval_s": 0.61,
+        }
+
+    result = analyze_calibration(
+        rows,
+        minimum_measured_duration_s=30.0,
+        maximum_interval_relative_error=0.2,
+    )
+
+    assert result["modern_capture_gate_passed"] is False
+    assert result["result_state"] == "inconclusive"
+    assert "collector interval" in " ".join(result["falsification_reasons"])
+
+
 def test_partial_when_small_payloads_are_missed() -> None:
     rows = [
         row(0, 1_000, idle=True),

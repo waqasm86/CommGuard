@@ -50,6 +50,17 @@ def test_export_contains_regular_artifacts(tmp_path) -> None:
     assert sha256_file(output) == digest
 
 
+def test_export_is_deterministic_and_writes_verified_sibling_checksum(tmp_path) -> None:
+    store = ArtifactStore(tmp_path / "artifacts")
+    store.initialize()
+    store.write_text("results/value.txt", "evidence\n")
+    first = store.export(tmp_path / "first.tar.gz")
+    second, checksum = store.export_with_checksum(tmp_path / "second.tar.gz")
+    assert sha256_file(first) == sha256_file(second)
+    assert checksum.read_text(encoding="utf-8") == f"{sha256_file(second)}  {second.name}\n"
+    assert (store.root / "results/value.txt").is_file()
+
+
 def test_export_member_selection_is_sorted_and_excludes_symlinks(tmp_path) -> None:
     store = ArtifactStore(tmp_path / "artifacts")
     store.initialize()

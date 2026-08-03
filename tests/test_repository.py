@@ -37,7 +37,7 @@ def test_canonical_notebook_inventory_is_valid_and_unexecuted() -> None:
     entries = inventory["canonical_notebooks"]
     names = [entry["filename"] for entry in entries]
     assert inventory["schema_version"] == 2
-    assert inventory["policy_version"] == "commguard-notebook-policy-v2"
+    assert inventory["policy_version"] == "commguard-notebook-policy-v3"
     assert names == CANONICAL_NOTEBOOKS
     assert [entry["order"] for entry in entries] == [1, 2, 3, 4]
     assert all(entry["role"].strip() for entry in entries)
@@ -66,12 +66,16 @@ def test_canonical_notebook_inventory_is_valid_and_unexecuted() -> None:
         assert "class ArtifactStore" not in source
         assert "drive.google.com/file/d/" not in source
         assert "REVIEWED_COMMIT" in source
-        assert 'SOURCE_ROOT = (REPOSITORY / "src").resolve()' in source
-        assert 'os.environ["PYTHONPATH"]' in source
-        assert "sys.path.insert(0, str(SOURCE_ROOT))" in source
         assert "importlib.invalidate_caches()" in source
         assert 'name.startswith("commguard.")' in source
-        assert "commguard_path.relative_to(SOURCE_ROOT)" in source
+        assert 'INSTALL_SOURCE = "auto"' in source
+        assert "wheel_candidates" in source
+        assert "archive_candidates" in source
+        assert "PINNED_PUBLIC_COMMIT" in source
+        assert "DEVELOPMENT_SMOKE_TEST" in source
+        assert "EXPECTED_PACKAGE_SHA256" in source
+        assert "EXPECTED_NOTEBOOK_SHA256" in source
+        assert "PIP_FREEZE" in source
         assert "--no-build-isolation" in source
         assert "--no-deps" in source
         assert 'checkout", "main' not in source
@@ -79,6 +83,7 @@ def test_canonical_notebook_inventory_is_valid_and_unexecuted() -> None:
         assert "NEXT STEP:" in source
         assert "SHA-256" in source
         assert notebook["metadata"]["commguard"]["required_accelerator"] == "two NVIDIA T4 GPUs"
+        assert any("parameters" in cell.get("metadata", {}).get("tags", []) for cell in code_cells)
         for cell in code_cells:
             compile("".join(cell["source"]), f"{name}:{cell['id']}", "exec")
         all_source = "\n".join("".join(cell["source"]) for cell in notebook["cells"])
@@ -93,7 +98,8 @@ def test_canonical_notebook_inventory_is_valid_and_unexecuted() -> None:
         assert "restore_archive" in source
         assert "EXPECTED_INPUT_SHA256" in source
     adversarial = (notebook_root / names[-1]).read_text(encoding="utf-8")
-    assert "RUN_ADVERSARIAL_PILOT = False" in adversarial
+    assert 'RUN_MODE = \\"smoke\\"' in adversarial
+    assert 'RUN_FULL_PERIODIC_SYNCHRONIZATION_STUDY = RUN_MODE == \\"full\\"' in adversarial
     assert "ADVERSARIAL_HUMAN_APPROVAL = False" in adversarial
 
     calibration = (notebook_root / names[0]).read_text(encoding="utf-8")
@@ -103,8 +109,9 @@ def test_canonical_notebook_inventory_is_valid_and_unexecuted() -> None:
         for cell in calibration_notebook["cells"]
         if cell["cell_type"] == "code"
     )
-    assert "payload_mib=(1, 4, 16, 64)" in calibration_source
-    assert "repetitions=3" in calibration_source
+    assert "(1, 4, 16, 64, 128)" in calibration_source
+    assert "REPETITIONS = 1 if DEVELOPMENT_SMOKE_ONLY else 5" in calibration_source
+    assert "intervals_s=(1.0, 0.5, 0.2)" in calibration_source
     assert "idle_usable_repetitions" in calibration_source
     assert "exact_calibration_reference_for_next_notebook" in calibration_source
     assert 'shutil.which("nvidia-smi")' in calibration_source
@@ -119,7 +126,8 @@ def test_canonical_notebook_inventory_is_valid_and_unexecuted() -> None:
     assert '"artifact_schema_version": CURRENT_SCHEMA_VERSION' in calibration_source
     assert "progress_callback=" in calibration_source
     assert "standard_sweep_validation" in calibration_source
-    assert 'SHA_FILE.open("x"' in calibration_source
+    assert "export_with_checksum" in calibration_source
+    assert "materialize_calibration_package" in calibration_source
     assert "FAILED/INCONCLUSIVE EVIDENCE WAS PRESERVED" in calibration_source
     assert "Do not run the benign notebook" in calibration_source
     calibration_ids = [cell["id"] for cell in calibration_notebook["cells"]]

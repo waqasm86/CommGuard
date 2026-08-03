@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from commguard.features.extraction import extract_run_features
+from commguard.schemas import LEGACY_SCHEMA_VERSION
 from commguard.telemetry.schema import (
     FIELD_UNITS,
     TELEMETRY_FIELDS,
@@ -30,6 +31,7 @@ def _samples() -> list[dict]:
                     wall_time_utc=f"2026-01-01T00:00:0{sequence}+00:00",
                     monotonic_ns=sequence * 1_000_000_000,
                     fields=fields,
+                    schema_version=LEGACY_SCHEMA_VERSION,
                 ).to_dict()
             )
     return samples

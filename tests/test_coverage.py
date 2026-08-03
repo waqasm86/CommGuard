@@ -102,6 +102,7 @@ def telemetry(run_id: str, duration_seconds: float, interval_seconds: float = 0.
                     wall_time_utc=(origin + timedelta(seconds=timestamp)).isoformat(),
                     monotonic_ns=int(timestamp * 1e9),
                     fields=fields,
+                    schema_version=LEGACY_SCHEMA_VERSION,
                 ).to_dict()
             )
         sequence += 1

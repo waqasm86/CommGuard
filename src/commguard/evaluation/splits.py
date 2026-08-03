@@ -40,6 +40,20 @@ class SplitPlan:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class CrossValidationFold:
+    """One complete-group cross-validation partition."""
+
+    fold: int
+    train_group_ids: tuple[str, ...]
+    test_group_ids: tuple[str, ...]
+    train_run_ids: tuple[str, ...]
+    test_run_ids: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
 def _run_groups(rows: Iterable[Mapping[str, Any]]) -> dict[str, RunGroup]:
     groups: dict[str, RunGroup] = {}
     for row in rows:
@@ -373,6 +387,62 @@ def grouped_split(
         test_fraction=test_fraction,
         validation_fraction=validation_fraction,
     ).assignments
+
+
+def group_cross_validation_folds(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    mode: str = "group_kfold",
+    n_splits: int = 5,
+    group_field: str = "run_id",
+) -> tuple[CrossValidationFold, ...]:
+    """Plan GroupKFold- or LeaveOneGroupOut-style complete-run folds.
+
+    The function is dependency-free and returns identities only; model fitting
+    remains in the analysis layer. ``experiment_session_id`` is the recommended
+    group for cross-session validation, while ``run_id`` prevents window leakage.
+    """
+    groups = _run_groups(rows)
+    allowed_fields = {"run_id", "experiment_session_id", "workload_family"}
+    if group_field not in allowed_fields:
+        raise ValueError(f"group_field must be one of {sorted(allowed_fields)}")
+    if mode not in {"group_kfold", "leave_one_group_out"}:
+        raise ValueError("mode must be group_kfold or leave_one_group_out")
+    runs_by_group: dict[str, list[str]] = defaultdict(list)
+    for run_id, group in groups.items():
+        value = run_id if group_field == "run_id" else str(getattr(group, group_field))
+        runs_by_group[value].append(run_id)
+    group_ids = sorted(runs_by_group)
+    if len(group_ids) < 2:
+        raise ValueError("grouped cross-validation requires at least two complete groups")
+    if mode == "leave_one_group_out":
+        test_groups_by_fold = [(group_id,) for group_id in group_ids]
+    else:
+        if not 2 <= n_splits <= len(group_ids):
+            raise ValueError("n_splits must be between two and the complete-group count")
+        test_groups_by_fold = [tuple(group_ids[index::n_splits]) for index in range(n_splits)]
+    folds: list[CrossValidationFold] = []
+    for index, test_group_ids in enumerate(test_groups_by_fold):
+        test_group_set = set(test_group_ids)
+        train_group_ids = tuple(value for value in group_ids if value not in test_group_set)
+        test_run_ids = tuple(
+            sorted(run_id for value in test_group_ids for run_id in runs_by_group[value])
+        )
+        train_run_ids = tuple(
+            sorted(run_id for value in train_group_ids for run_id in runs_by_group[value])
+        )
+        if set(train_run_ids) & set(test_run_ids):
+            raise RuntimeError("complete-run cross-validation leakage detected")
+        folds.append(
+            CrossValidationFold(
+                fold=index,
+                train_group_ids=train_group_ids,
+                test_group_ids=test_group_ids,
+                train_run_ids=train_run_ids,
+                test_run_ids=test_run_ids,
+            )
+        )
+    return tuple(folds)
 
 
 def audit_leakage(

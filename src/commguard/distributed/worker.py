@@ -359,6 +359,7 @@ def _run_sparse_sync_training(
     communication_bytes_proxy = 0
     processed_tokens = 0
     last_loss: float | None = None
+    loss_trajectory: list[dict[str, float | int]] = []
     last_step_synchronized = False
     while controller.should_continue():
         optimizer.zero_grad(set_to_none=True)
@@ -366,6 +367,8 @@ def _run_sparse_sync_training(
         with _precision_context(torch, precision):
             logits = model(tokens[:, :-1])
             loss = loss_fn(logits.reshape(-1, vocab_size), tokens[:, 1:].reshape(-1))
+        if not bool(torch.isfinite(loss).item()):
+            raise RuntimeError(f"non-finite sparse-training loss at step {step + 1}")
         loss.backward()
         optimizer.step()
         step += 1
@@ -381,11 +384,25 @@ def _run_sparse_sync_training(
             )
             writer.emit("parameter_average_complete", step=step, checksums=checksums)
         last_loss = float(loss.detach())
+        if step <= 10 or step % 10 == 0:
+            loss_trajectory.append({"step": step, "loss": last_loss})
         processed_tokens += batch_size * (sequence_length - 1)
         writer.emit("forward_complete", step=step, sparse_synchronization=True)
         writer.emit("backward_complete", step=step, synchronized=last_step_synchronized)
         writer.emit("heartbeat", step=step)
         controller.complete_iteration()
+    if step and (not loss_trajectory or loss_trajectory[-1]["step"] != step):
+        assert last_loss is not None
+        loss_trajectory.append({"step": step, "loss": last_loss})
+    pre_final_checksum = torch.stack(
+        [parameter.detach().float().sum() for parameter in model.parameters()]
+    ).sum()
+    gathered_pre_final = [
+        torch.zeros_like(pre_final_checksum) for _ in range(dist.get_world_size())
+    ]
+    dist.all_gather(gathered_pre_final, pre_final_checksum)
+    pre_final_values = [float(value.item()) for value in gathered_pre_final]
+    pre_final_parameter_divergence = max(pre_final_values) - min(pre_final_values)
     if step and not last_step_synchronized:
         communication_bytes_proxy += _average_model_parameters(torch, dist, model)
         actual_sync_rounds += 1
@@ -410,8 +427,15 @@ def _run_sparse_sync_training(
         inference_steps=0,
         processed_tokens=processed_tokens,
         throughput_tokens_per_s=processed_tokens / elapsed if elapsed else None,
+        steps_per_second=step / elapsed if elapsed else None,
         final_loss_proxy=last_loss,
+        loss_trajectory=loss_trajectory,
         wall_time_s=elapsed,
+        synchronization_frequency=actual_sync_rounds / step if step else None,
+        synchronization_reduction_fraction=(1.0 - (actual_sync_rounds / step) if step else None),
+        pre_final_parameter_checksum_by_rank=pre_final_values,
+        pre_final_parameter_divergence=pre_final_parameter_divergence,
+        parameter_divergence_definition="max_minus_min_rank_parameter_checksum_before_final_sync",
         parameter_state_agreement=expected_sync_rounds == actual_sync_rounds,
         detector_score=None,
         detector_model=None,
@@ -934,6 +958,13 @@ def main() -> int:
         if config.get("inject_timeout_rank") == rank:
             time.sleep(float(config.get("process_group_timeout_s", 120)) * 2)
         handler(torch, dist, writer, config, local_rank)
+        cooldown_seconds = float(config.get("cooldown_seconds", 0.0))
+        if not 0 <= cooldown_seconds <= 30:
+            raise ValueError("cooldown_seconds must be between zero and 30")
+        if cooldown_seconds:
+            writer.emit("cooldown_start", duration_seconds=cooldown_seconds)
+            time.sleep(cooldown_seconds)
+            writer.emit("cooldown_complete", duration_seconds=cooldown_seconds)
         dist.barrier()
         writer.emit("completion", healthy=True)
         return 0

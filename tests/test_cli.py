@@ -27,5 +27,15 @@ def test_module_help_lists_phase_one_commands() -> None:
         env=environment,
     )
     assert result.returncode == 0
-    for command in ("preflight", "calibrate", "run", "features", "evaluate", "report"):
+    for command in (
+        "preflight",
+        "calibrate",
+        "run",
+        "features",
+        "evaluate",
+        "report",
+        "corpus",
+        "verify-artifact",
+        "build-review-bundle",
+    ):
         assert command in result.stdout

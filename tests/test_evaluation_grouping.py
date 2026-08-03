@@ -7,11 +7,13 @@ import pytest
 from commguard.evaluation import (
     audit_leakage,
     evaluate_detector,
+    group_cross_validation_folds,
     grouped_split,
     make_split_plan,
 )
 from commguard.evaluation.baselines import (
     _evaluate_ablation,
+    _evaluate_multiclass_diagnostic,
     _select_model_and_threshold,
     _stable_sigmoid,
 )
@@ -258,6 +260,53 @@ def test_leakage_audit_rejects_identity_feature() -> None:
     audit = audit_leakage(records, ["gpu0__mean", "source_path"], grouped_split(records))
     assert not audit["passed"]
     assert audit["forbidden_feature_columns"] == ["source_path"]
+
+
+def test_group_cross_validation_never_splits_complete_runs() -> None:
+    records = rows()
+    folds = group_cross_validation_folds(records, mode="group_kfold", n_splits=3)
+    assert len(folds) == 3
+    assert set().union(*(set(fold.test_run_ids) for fold in folds)) == {
+        record["run_id"] for record in records
+    }
+    for fold in folds:
+        assert not set(fold.train_run_ids) & set(fold.test_run_ids)
+
+
+def test_leave_one_session_out_holds_out_one_complete_session() -> None:
+    records = rows(sessions=3)
+    folds = group_cross_validation_folds(
+        records,
+        mode="leave_one_group_out",
+        group_field="experiment_session_id",
+    )
+    assert len(folds) == 3
+    assert all(len(fold.test_group_ids) == 1 for fold in folds)
+    assert all(not set(fold.train_run_ids) & set(fold.test_run_ids) for fold in folds)
+
+
+def test_secondary_multiclass_keeps_controls_explicit() -> None:
+    pd = pytest.importorskip("pandas")
+    pytest.importorskip("sklearn")
+    labels = ("training", "inference", "control")
+    records = []
+    assignments = {}
+    for split_index, split in enumerate(("train", "validation", "test")):
+        for label_index, label in enumerate(labels):
+            run_id = f"{split}-{label}"
+            assignments[run_id] = split
+            records.append(
+                {
+                    "run_id": run_id,
+                    "target_label": label,
+                    "feature": float(label_index * 10 + split_index),
+                }
+            )
+    result = _evaluate_multiclass_diagnostic(pd.DataFrame(records), assignments, ["feature"])
+    assert result["labels"] == ["training", "inference", "control"]
+    assert result["task"] == "training_vs_inference_vs_control"
+    assert result["diagnostic_only"] is True
+    assert result["test_run_count"] == 3
 
 
 def test_detector_fitting_requires_calibration(tmp_path) -> None:
