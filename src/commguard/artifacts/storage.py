@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import json
 import os
@@ -162,7 +163,7 @@ class ArtifactStore:
         return sha256_file(self.resolve(relative))
 
     def export(self, output: str | Path) -> Path:
-        """Export regular files without following symlinks."""
+        """Export regular files deterministically without following symlinks."""
         output_path = Path(output).resolve()
         if output_path.exists():
             raise ArtifactExistsError(f"refusing to overwrite archive: {output_path}")
@@ -177,11 +178,56 @@ class ArtifactStore:
         ) as temporary:
             temp_path = Path(temporary.name)
         try:
-            with tarfile.open(temp_path, mode="w:gz") as archive:
+            with (
+                temp_path.open("wb") as raw_stream,
+                gzip.GzipFile(filename="", mode="wb", fileobj=raw_stream, mtime=0) as zipped,
+                tarfile.open(fileobj=zipped, mode="w") as archive,
+            ):
                 for path in sorted(self.root.rglob("*")):
-                    if path.is_file() and not path.is_symlink():
-                        archive.add(path, arcname=path.relative_to(self.root), recursive=False)
+                    if not path.is_file() or path.is_symlink():
+                        continue
+                    relative = path.relative_to(self.root).as_posix()
+                    info = tarfile.TarInfo(relative)
+                    info.size = path.stat().st_size
+                    info.mode = 0o644
+                    info.mtime = 0
+                    info.uid = 0
+                    info.gid = 0
+                    info.uname = ""
+                    info.gname = ""
+                    with path.open("rb") as source:
+                        archive.addfile(info, source)
             os.replace(temp_path, output_path)
         finally:
             temp_path.unlink(missing_ok=True)
         return output_path
+
+    def export_with_checksum(self, output: str | Path) -> tuple[Path, Path]:
+        """Create, verify, and checksum a non-destructive evidence archive."""
+        output_path = Path(output).resolve()
+        checksum_path = output_path.with_suffix(output_path.suffix + ".sha256")
+        if checksum_path.exists():
+            raise ArtifactExistsError(f"refusing to overwrite checksum: {checksum_path}")
+        archive = self.export(output_path)
+        expected_members = sorted(
+            path.relative_to(self.root).as_posix()
+            for path in self.root.rglob("*")
+            if path.is_file() and not path.is_symlink()
+        )
+        with tarfile.open(archive, mode="r:gz") as bundle:
+            observed_members = bundle.getnames()
+        if observed_members != expected_members:
+            archive.unlink(missing_ok=True)
+            raise ValidationError("archive member verification failed")
+        digest = sha256_file(archive)
+        try:
+            descriptor = os.open(checksum_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                stream.write(f"{digest}  {archive.name}\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+        except BaseException:
+            checksum_path.unlink(missing_ok=True)
+            archive.unlink(missing_ok=True)
+            raise
+        return archive, checksum_path

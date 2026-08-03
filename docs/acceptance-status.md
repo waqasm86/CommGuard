@@ -1,5 +1,14 @@
 # Acceptance status
 
+## Kaggle prototype completion boundary
+
+The source workflow is locally CPU-tested and Kaggle-executable. No new full
+Kaggle package is scientifically accepted. Smoke mode always records
+`development_smoke_only=true` and `scientific_acceptance_eligible=false`.
+Calibration result states are `supported`, `partially_supported`,
+`inconclusive`, `not_supported`, and `failed`; process exit zero alone cannot
+select any scientific state.
+
 Status as of the local SDK build:
 
 ## Locally verified
@@ -12,7 +21,7 @@ Status as of the local SDK build:
   duplicates, links, special members, and configured size/member overages.
 - CPU-safe offline tests for schemas, artifacts, fake telemetry, calibration,
   features, grouping/leakage, rank evidence, preflight parsing, and reporting.
-- Idle-aware calibration policy with three idle and three per-payload
+- Idle-aware calibration policy with five idle and five per-payload
   repetitions, deterministic capture/monotonicity/dynamic-range decisions, and
   explicit legacy compatibility that cannot satisfy the modern gate.
 - Hash-bound calibration provenance through final corpus, extraction,

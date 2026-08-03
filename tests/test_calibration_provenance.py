@@ -199,7 +199,7 @@ def test_reference_rejects_reused_path_with_altered_content(tmp_path) -> None:
         verify_calibration_reference(tmp_path, reference)
 
 
-def test_standard_sweep_collects_idle_and_four_repeated_payloads(tmp_path, monkeypatch) -> None:
+def test_standard_sweep_collects_idle_and_five_repeated_payloads(tmp_path, monkeypatch) -> None:
     context = ProvenanceContext(
         experiment_session_id="session-current",
         collection_id="collection-current",
@@ -255,11 +255,19 @@ def test_standard_sweep_collects_idle_and_four_repeated_payloads(tmp_path, monke
                 "exit_status": "completed",
                 "workload_name": workload,
                 "config": config,
+                "measured_duration_seconds": 30.0,
+                "environment": {
+                    "gpus": [{"uuid": "GPU-0"}, {"uuid": "GPU-1"}],
+                },
             },
             "pcie_supported": True,
             "pcie_total_mean_bytes_per_s": signal,
             "pcie_total_median_bytes_per_s": signal,
             "pcie_sample_count": 10,
+            "telemetry_diagnostics": {
+                "requested_interval_s": 0.5,
+                "mean_interval_s": 0.5,
+            },
         }
 
     monkeypatch.setattr(orchestrator, "run_experiment", experiment)
@@ -276,33 +284,35 @@ def test_standard_sweep_collects_idle_and_four_repeated_payloads(tmp_path, monke
     )
 
     assert result["status"] == "supported"
-    assert len(calls) == 15
-    assert [name for name, _ in calls].count("calibration_idle") == 3
+    assert len(calls) == 30
+    assert [name for name, _ in calls].count("calibration_idle") == 5
     assert {name for name, _ in calls if name != "calibration_idle"} == {
         "collective_all_reduce_1mib",
         "collective_all_reduce_4mib",
         "collective_all_reduce_16mib",
         "collective_all_reduce_64mib",
+        "collective_all_reduce_128mib",
     }
     assert {item["payload_mib"] for item in result["payload_summaries"]} == {
         1.0,
         4.0,
         16.0,
         64.0,
+        128.0,
     }
-    assert result["idle_baseline_usable_repetitions"] == 3
+    assert result["idle_baseline_usable_repetitions"] == 5
     assert result["reference"]["calibration_relationship"] == "current_session"
     saved = json.loads(Path(result["path"]).read_text(encoding="utf-8"))
     assert saved["schema_version"] == CURRENT_SCHEMA_VERSION
     assert saved["modern_capture_gate_passed"] is True
-    assert result["standard_sweep_validation"]["planned_run_count"] == 15
+    assert result["standard_sweep_validation"]["planned_run_count"] == 30
     assert result["standard_sweep_validation"]["clean_standard_calibration"] is True
     assert len(list((tmp_path / "results/calibration-sweeps").glob("*/started.json"))) == 1
     assert len(list((tmp_path / "results/calibration-sweeps").glob("*/completed.json"))) == 1
     assert progress_events[0]["stage"] == "sweep_started"
     assert progress_events[-1]["stage"] == "sweep_completed"
-    assert sum(event["stage"] == "run_started" for event in progress_events) == 15
-    assert sum(event["stage"] == "run_completed" for event in progress_events) == 15
+    assert sum(event["stage"] == "run_started" for event in progress_events) == 30
+    assert sum(event["stage"] == "run_completed" for event in progress_events) == 30
 
     with pytest.raises(ArtifactExistsError, match="completed calibration sweep"):
         orchestrator.run_calibration_sweep(output=tmp_path, provenance=context)

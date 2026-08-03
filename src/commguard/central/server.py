@@ -63,8 +63,6 @@ class CentralIngestionService:
             registration.validate()
             if agent_id != registration.agent_id:
                 raise ValueError("registration mapping key must equal agent_id")
-        if len({item.node_id for item in self.registrations.values()}) != len(self.registrations):
-            raise ValueError("each registered agent must have a distinct node_id")
         if set(expected_nodes) != {item.node_id for item in self.registrations.values()}:
             raise ValueError("expected nodes must exactly match registered node IDs")
         if not experiment_session_id:
@@ -75,6 +73,7 @@ class CentralIngestionService:
             raise ValueError("clock skew and staleness limits must be non-negative/positive")
         self.experiment_session_id = experiment_session_id
         self.expected_nodes = tuple(sorted(expected_nodes))
+        self.expected_agents = tuple(sorted(self.registrations))
         self.maximum_payload_bytes = maximum_payload_bytes
         self.maximum_clock_skew_seconds = maximum_clock_skew_seconds
         self.stale_after_seconds = stale_after_seconds
@@ -82,9 +81,13 @@ class CentralIngestionService:
         self.last_sequence_by_agent: dict[str, int] = {}
         self.last_batch_by_agent: dict[str, str] = {}
         self.last_seen_by_node: dict[str, datetime] = {}
+        self.last_seen_by_agent: dict[str, datetime] = {}
         self.seen_message_ids: set[str] = set()
         self.accepted_message_digests: dict[str, str] = {}
         self.accepted_samples_by_node: dict[str, list[tuple[str, dict[str, Any]]]] = defaultdict(
+            list
+        )
+        self.accepted_samples_by_agent: dict[str, list[tuple[str, dict[str, Any]]]] = defaultdict(
             list
         )
 
@@ -252,8 +255,12 @@ class CentralIngestionService:
             self.accepted_samples_by_node[message.node_id].extend(
                 (message.batch_id, dict(sample)) for sample in message.samples
             )
+            self.accepted_samples_by_agent[message.agent_id].extend(
+                (message.batch_id, dict(sample)) for sample in message.samples
+            )
         self.last_sequence_by_agent[agent_id] = message.sequence
         self.last_seen_by_node[message.node_id] = now
+        self.last_seen_by_agent[agent_id] = now
         self.seen_message_ids.add(message_id)
         self.accepted_message_digests[message_id] = authenticated_digest
         return self._ack(message_id, True, "accepted", "message accepted", agent_id)
@@ -277,12 +284,34 @@ class CentralIngestionService:
             }
         return result
 
+    def agent_health(self) -> dict[str, dict[str, Any]]:
+        """Report rank/GPU-agent loss independently of physical-node health."""
+        now = self.clock()
+        result: dict[str, dict[str, Any]] = {}
+        for agent_id in self.expected_agents:
+            last_seen = self.last_seen_by_agent.get(agent_id)
+            age = (now - last_seen).total_seconds() if last_seen is not None else None
+            result[agent_id] = {
+                "node_id": self.registrations[agent_id].node_id,
+                "last_seen_utc": last_seen.isoformat() if last_seen is not None else None,
+                "age_seconds": age,
+                "status": (
+                    "missing"
+                    if last_seen is None
+                    else "stale"
+                    if age is not None and age > self.stale_after_seconds
+                    else "healthy"
+                ),
+            }
+        return result
+
     def aggregate_window(self, start_utc: str, end_utc: str) -> dict[str, Any]:
         start = datetime.fromisoformat(start_utc.replace("Z", "+00:00"))
         end = datetime.fromisoformat(end_utc.replace("Z", "+00:00"))
         if end <= start:
             raise ValueError("aggregation window end must be after start")
         health = self.node_health()
+        agent_health = self.agent_health()
         nodes: dict[str, Any] = {}
         evidence_ids: set[str] = set()
         for node_id in self.expected_nodes:
@@ -313,15 +342,40 @@ class CentralIngestionService:
             for node_id, summary in nodes.items()
             if summary["sample_count"] == 0 or summary["health"]["status"] != "healthy"
         ]
+        agents: dict[str, Any] = {}
+        for agent_id in self.expected_agents:
+            selected = []
+            for batch_id, sample in self.accepted_samples_by_agent.get(agent_id, []):
+                observed = datetime.fromisoformat(
+                    str(sample["observed_at_utc"]).replace("Z", "+00:00")
+                )
+                if start <= observed < end:
+                    selected.append(sample)
+                    evidence_ids.add(batch_id)
+            agents[agent_id] = {
+                "node_id": self.registrations[agent_id].node_id,
+                "health": agent_health[agent_id],
+                "sample_count": len(selected),
+                "ranks": sorted({int(sample["rank"]) for sample in selected}),
+                "gpu_uuids": sorted({str(sample["gpu_uuid"]) for sample in selected}),
+            }
+        missing_agents = [
+            agent_id
+            for agent_id, summary in agents.items()
+            if summary["sample_count"] == 0 or summary["health"]["status"] != "healthy"
+        ]
         return {
             "window_id": f"window-{uuid.uuid4().hex}",
             "start_utc": start.isoformat(),
             "end_utc": end.isoformat(),
             "nodes": nodes,
+            "agents": agents,
             "missing_or_stale_nodes": missing_nodes,
-            "complete": not missing_nodes,
+            "missing_or_stale_agents": missing_agents,
+            "complete": not missing_nodes and not missing_agents,
             "evidence_batch_ids": sorted(evidence_ids),
             "physical_multi_node_validated": False,
+            "prototype_scope": "single_node_dual_gpu",
         }
 
 

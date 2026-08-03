@@ -2,17 +2,31 @@
 
 ## Unreleased (0.2.0 candidate)
 
+- Add the authoritative single-node dual-T4 scope contract to SDK provenance,
+  notebook status, stage manifests, documentation, and review exports.
+- Add configurable 1.0/0.5/0.2-second sampling calibration, optional
+  diagnostic 0.1-second sampling, repetition-level capture reporting, robust
+  idle MAD thresholds, and five explicit calibration result states.
+- Add resumable exact-match corpus execution, complete-run feature packages,
+  three named feature sets, control-safe grouped evaluation, interpretable
+  threshold/tree baselines, and periodic synchronization studies at
+  `k = 1, 2, 4, 8, 16`.
+- Add deterministic non-destructive prototype archive creation with verified
+  contents and sibling SHA-256 files, plus stage materializers for every
+  required Kaggle deliverable.
+- Extend the local central collector for two same-node rank agents, independent
+  sequence/rank health, incomplete-window detection, and mandatory abstention.
 - Implement the missing two-rank idle worker path used by calibration-v3,
   including measured-interval lifecycle/heartbeat evidence without a measured
   collective, and bound idle PCIe summaries to that interval.
 - Create and validate preflight output directories, give every calibration
   payload an accurate workload identity, refuse repeated sweeps in one output
-  root, validate the exact 15-run matrix, and make archive export create-only
+  root, validate the exact 30-run matrix, and make archive export create-only
   and atomic by default.
 - Harden the canonical calibration notebook's source/import/hardware/workspace,
   progress, bootstrap-provenance, standard-result validation, and diagnostic
   evidence export flow.
-- Require idle-aware three-repetition calibration at 1/4/16/64 MiB for new
+- Require idle-aware five-repetition calibration at 1/4/16/64/128 MiB for new
   evidence, and bind benign/evaluation artifacts to one hash-verified calibration.
 - Make exact authenticated central-ingestion retries idempotent after lost
   acknowledgments while rejecting changed content under a reused message ID.

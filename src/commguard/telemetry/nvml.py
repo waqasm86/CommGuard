@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import statistics
 import threading
 import time
@@ -10,11 +11,27 @@ from datetime import datetime, timezone
 from typing import Any, Protocol
 
 from commguard.schemas import (
+    CURRENT_SCHEMA_VERSION,
     FIELD_UNITS,
     TELEMETRY_FIELDS,
     FieldReading,
     TelemetrySample,
 )
+
+STANDARD_SAMPLING_INTERVALS_S = (1.0, 0.5, 0.2)
+DIAGNOSTIC_SAMPLING_INTERVAL_S = 0.1
+
+
+def validate_sampling_interval(interval_s: float, *, allow_diagnostic: bool = False) -> float:
+    """Validate a protocol sampling interval without accepting arbitrary rates."""
+    value = float(interval_s)
+    allowed = set(STANDARD_SAMPLING_INTERVALS_S)
+    if allow_diagnostic:
+        allowed.add(DIAGNOSTIC_SAMPLING_INTERVAL_S)
+    if value not in allowed:
+        suffix = " plus diagnostic 0.1" if allow_diagnostic else ""
+        raise ValueError(f"sampling interval must be one of 1.0, 0.5, 0.2{suffix} seconds")
+    return value
 
 
 class TelemetryBackend(Protocol):
@@ -96,6 +113,9 @@ class NvmlBackend:
             "memory_used_bytes": self._read(
                 "memory_used_bytes", lambda: nvml.nvmlDeviceGetMemoryInfo(handle).used
             ),
+            "memory_total_bytes": self._read(
+                "memory_total_bytes", lambda: nvml.nvmlDeviceGetMemoryInfo(handle).total
+            ),
             "power_draw_w": self._read(
                 "power_draw_w",
                 lambda: nvml.nvmlDeviceGetPowerUsage(handle),
@@ -113,7 +133,8 @@ class NvmlBackend:
                 "memory_clock_mhz",
                 lambda: nvml.nvmlDeviceGetClockInfo(handle, nvml.NVML_CLOCK_MEM),
             ),
-            # NVML returns KiB/s for these calls; preserve that conversion explicitly.
+            # NVML documents these calls as KB/s. The stored byte-rate conversion
+            # convention is recorded on every sample instead of being implicit.
             "pcie_tx_bytes_per_s": self._read(
                 "pcie_tx_bytes_per_s",
                 lambda: nvml.nvmlDeviceGetPcieThroughput(handle, nvml.NVML_PCIE_UTIL_TX_BYTES),
@@ -203,6 +224,7 @@ class TelemetryCollector:
             sequence = 0
             while not self._stop.is_set():
                 started = time.monotonic()
+                actual_interval = started - self._cycle_starts[-1] if self._cycle_starts else None
                 self._cycle_starts.append(started)
                 monotonic_ns = time.monotonic_ns()
                 wall_time = datetime.now(timezone.utc).isoformat()
@@ -215,6 +237,23 @@ class TelemetryCollector:
                         wall_time_utc=wall_time,
                         monotonic_ns=monotonic_ns,
                         fields=self.backend.read_fields(index),
+                        target_sampling_interval_s=self.interval_s,
+                        actual_sampling_interval_s=actual_interval,
+                        sampling_jitter_s=(
+                            abs(actual_interval - self.interval_s)
+                            if actual_interval is not None
+                            else None
+                        ),
+                        rank=index,
+                        process_id=os.getpid(),
+                        raw_unit_metadata={
+                            "pcie_nvml_raw_unit": "KB/second (NVML API)",
+                            "pcie_bytes_multiplier": 1024,
+                            "pcie_conversion_convention": "1 NVML KB = 1024 bytes",
+                            "pcie_counter_query_window_ms": 20,
+                            "stored_pcie_unit": "bytes/second",
+                        },
+                        schema_version=CURRENT_SCHEMA_VERSION,
                     )
                     sample.validate()
                     self.samples.append(sample)
@@ -262,20 +301,48 @@ class TelemetryCollector:
         )
 
 
+def compare_sampling_intervals(
+    run_id: str,
+    intervals_s: tuple[float, ...] = STANDARD_SAMPLING_INTERVALS_S,
+    duration_s: float = 5.0,
+    backend_factory: Any = NvmlBackend,
+    *,
+    allow_diagnostic: bool = False,
+) -> list[dict[str, Any]]:
+    """Measure jitter and overhead for the protocol's candidate intervals."""
+    if duration_s <= 0:
+        raise ValueError("sampling comparison duration must be positive")
+    output = []
+    for interval in intervals_s:
+        interval = validate_sampling_interval(interval, allow_diagnostic=allow_diagnostic)
+        collector = TelemetryCollector(
+            f"{run_id}-{interval:g}s", interval_s=interval, backend=backend_factory()
+        )
+        output.append(
+            {
+                "target_interval_s": interval,
+                "rate_hz": 1.0 / interval,
+                **collector.collect_for(duration_s).to_dict(),
+            }
+        )
+    return output
+
+
 def compare_sampling_rates(
     run_id: str,
-    rates_hz: tuple[float, ...] = (1.0, 2.0, 10.0),
+    rates_hz: tuple[float, ...] = (1.0, 2.0, 5.0),
     duration_s: float = 5.0,
     backend_factory: Any = NvmlBackend,
 ) -> list[dict[str, Any]]:
-    """Measure jitter/overhead at several rates on a bounded control interval."""
-    output = []
-    for rate in rates_hz:
-        collector = TelemetryCollector(
-            f"{run_id}-{rate:g}hz", interval_s=1.0 / rate, backend=backend_factory()
-        )
-        output.append({"rate_hz": rate, **collector.collect_for(duration_s).to_dict()})
-    return output
+    """Compatibility wrapper around :func:`compare_sampling_intervals`."""
+    intervals = tuple(1.0 / float(rate) for rate in rates_hz)
+    return compare_sampling_intervals(
+        run_id,
+        intervals_s=intervals,
+        duration_s=duration_s,
+        backend_factory=backend_factory,
+        allow_diagnostic=DIAGNOSTIC_SAMPLING_INTERVAL_S in intervals,
+    )
 
 
 def measure_runtime_overhead(

@@ -20,6 +20,7 @@ from commguard.artifacts import ArtifactStore
 from commguard.exceptions import ReadinessError
 from commguard.provenance import ProvenanceContext, source_state
 from commguard.schemas import CURRENT_SCHEMA_VERSION
+from commguard.scope import with_prototype_scope
 
 PACKAGES = (
     "torch",
@@ -284,46 +285,48 @@ def check_environment(
         node_id = socket.gethostname()
         source_commit = current_source.commit
         source_dirty = current_source.dirty
-    report: dict[str, Any] = {
-        "artifact_kind": "environment_report",
-        "schema_version": CURRENT_SCHEMA_VERSION,
-        "created_at_utc": datetime.now(timezone.utc).isoformat(),
-        "experiment_session_id": experiment_session_id,
-        "node_id": node_id,
-        "environment_fingerprint": fingerprint,
-        # Compatibility alias. This is not a true experiment-session identifier.
-        "session_fingerprint": fingerprint,
-        "source_commit": source_commit,
-        "source_dirty": source_dirty,
-        "python": {"version": sys.version, "executable": sys.executable},
-        "platform": {
-            "system": platform.system(),
-            "release": platform.release(),
-            "version": platform.version(),
-            "machine": platform.machine(),
-            "hostname": socket.gethostname(),
-        },
-        "resources": {
-            "ram_total_bytes": ram_total,
-            "disk_total_bytes": disk.total,
-            "disk_free_bytes": disk.free,
-        },
-        "gpus": gpus,
-        "nvidia_smi_query": gpu_query,
-        "topology": topology,
-        "nvcc": nvcc,
-        "torch": torch_info,
-        "telemetry_capabilities": telemetry_capabilities,
-        "packages": fingerprint_input["packages"],
-        "network": _network_status(check_network),
-        "readiness": readiness,
-        "strict_ready": strict_ready,
-        "limitations": [
-            "GPU visibility alone does not prove two-rank participation.",
-            "Peer access and topology support do not prove PCIe counters are informative.",
-            "A torchrun NCCL smoke test and communication calibration are still required.",
-        ],
-    }
+    report: dict[str, Any] = with_prototype_scope(
+        {
+            "artifact_kind": "environment_report",
+            "schema_version": CURRENT_SCHEMA_VERSION,
+            "created_at_utc": datetime.now(timezone.utc).isoformat(),
+            "experiment_session_id": experiment_session_id,
+            "node_id": node_id,
+            "environment_fingerprint": fingerprint,
+            # Compatibility alias. This is not a true experiment-session identifier.
+            "session_fingerprint": fingerprint,
+            "source_commit": source_commit,
+            "source_dirty": source_dirty,
+            "python": {"version": sys.version, "executable": sys.executable},
+            "platform": {
+                "system": platform.system(),
+                "release": platform.release(),
+                "version": platform.version(),
+                "machine": platform.machine(),
+                "hostname": socket.gethostname(),
+            },
+            "resources": {
+                "ram_total_bytes": ram_total,
+                "disk_total_bytes": disk.total,
+                "disk_free_bytes": disk.free,
+            },
+            "gpus": gpus,
+            "nvidia_smi_query": gpu_query,
+            "topology": topology,
+            "nvcc": nvcc,
+            "torch": torch_info,
+            "telemetry_capabilities": telemetry_capabilities,
+            "packages": fingerprint_input["packages"],
+            "network": _network_status(check_network),
+            "readiness": readiness,
+            "strict_ready": strict_ready,
+            "limitations": [
+                "GPU visibility alone does not prove two-rank participation.",
+                "Peer access and topology support do not prove PCIe counters are informative.",
+                "A torchrun NCCL smoke test and communication calibration are still required.",
+            ],
+        }
+    )
     if output is not None:
         store = ArtifactStore(output_path)
         store.initialize()

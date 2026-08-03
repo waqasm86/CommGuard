@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from commguard.environment.preflight import check_environment
+from commguard.schemas import TELEMETRY_FIELDS
 from commguard.telemetry import NvmlBackend
 
 
@@ -18,7 +19,7 @@ def test_real_nvml_attempts_all_fields() -> None:
     try:
         assert backend.device_count() >= 1
         readings = backend.read_fields(0)
-        assert len(readings) == 9
+        assert set(readings) == set(TELEMETRY_FIELDS)
         assert all(
             reading.value is not None if reading.supported else reading.error is not None
             for reading in readings.values()

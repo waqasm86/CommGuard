@@ -20,6 +20,12 @@ SAMPLE_KEYS = frozenset(
         "monotonic_ns",
         "gpu_index",
         "gpu_uuid",
+        "sequence_number",
+        "rank",
+        "process_id",
+        "configuration_hash",
+        "validity_flags",
+        "telemetry_support_flags",
         "fields",
     }
 )
@@ -99,9 +105,23 @@ def validate_telemetry_samples(samples: tuple[dict[str, Any], ...]) -> None:
             observed = datetime.fromisoformat(str(sample["observed_at_utc"]).replace("Z", "+00:00"))
             monotonic_ns = int(sample["monotonic_ns"])
             gpu_index = int(sample["gpu_index"])
+            sequence_number = int(sample["sequence_number"])
+            rank = int(sample["rank"])
+            process_id = int(sample["process_id"])
         except (TypeError, ValueError) as exc:
             raise ValueError(f"invalid_sample: sample {index} identity/timestamp") from exc
-        if observed.tzinfo is None or monotonic_ns < 0 or gpu_index < 0 or not sample["gpu_uuid"]:
+        if (
+            observed.tzinfo is None
+            or monotonic_ns < 0
+            or gpu_index < 0
+            or sequence_number < 0
+            or rank < 0
+            or process_id <= 0
+            or not sample["gpu_uuid"]
+            or not sample["configuration_hash"]
+            or not isinstance(sample["validity_flags"], Mapping)
+            or not isinstance(sample["telemetry_support_flags"], Mapping)
+        ):
             raise ValueError(f"invalid_sample: sample {index} identity/timestamp")
         fields = sample.get("fields")
         if not isinstance(fields, Mapping) or set(fields) != set(TELEMETRY_FIELDS):

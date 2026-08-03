@@ -11,6 +11,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from commguard.scope import with_prototype_scope
+
 _ID_COMPONENT = re.compile(r"[^a-zA-Z0-9_.-]+")
 
 
@@ -122,10 +124,10 @@ class ProvenanceContext:
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        return with_prototype_scope(asdict(self))
 
     def run_fields(self, *, random_seed: int | None = None) -> dict[str, Any]:
-        values = self.to_dict()
+        values = asdict(self)
         values["random_seed"] = self.random_seed if random_seed is None else random_seed
         return values
 

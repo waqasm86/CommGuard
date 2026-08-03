@@ -8,13 +8,15 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from commguard.artifacts import ArtifactStore
+from commguard.artifacts import ArtifactStore, sha256_file
+from commguard.corpus import CorpusManifest
 from commguard.environment.preflight import check_environment, summarize_environment
 from commguard.evaluation import evaluate_detector
 from commguard.exceptions import CommGuardError
 from commguard.features import extract_features
 from commguard.orchestrator import (
     estimate_matrix,
+    plan_matrix,
     run_calibration_sweep,
     run_experiment,
     run_matrix,
@@ -44,9 +46,15 @@ def _parser() -> argparse.ArgumentParser:
 
     calibrate = subparsers.add_parser("calibrate", help="run collective payload calibration")
     calibrate.add_argument("--output", type=Path, default=Path("artifacts"))
-    calibrate.add_argument("--payload-mib", type=int, nargs="+", default=[1, 4, 16, 64])
+    calibrate.add_argument("--payload-mib", type=int, nargs="+", default=[1, 4, 16, 64, 128])
     calibrate.add_argument("--collective", default="all_reduce")
-    calibrate.add_argument("--repetitions", type=int, default=3)
+    calibrate.add_argument("--repetitions", type=int, default=5)
+    calibrate.add_argument(
+        "--sampling-interval",
+        type=float,
+        choices=(1.0, 0.5, 0.2),
+        default=0.5,
+    )
     calibrate.add_argument("--timeout", type=float, default=180)
 
     run = subparsers.add_parser("run", help="run one workload or a profile")
@@ -94,6 +102,29 @@ def _parser() -> argparse.ArgumentParser:
     export = subparsers.add_parser("export", help="archive the complete artifact tree")
     export.add_argument("--input", type=Path, default=Path("artifacts"))
     export.add_argument("--output", type=Path, required=True)
+
+    corpus = subparsers.add_parser("corpus", help="plan or validate a corpus without GPUs")
+    corpus_commands = corpus.add_subparsers(dest="corpus_command", required=True)
+    corpus_plan = corpus_commands.add_parser("plan", help="print a deterministic run plan")
+    corpus_plan.add_argument(
+        "--profile",
+        choices=("smoke", "standard", "extended"),
+        default="standard",
+    )
+    corpus_plan.add_argument("--repetitions", type=int, default=3)
+    corpus_validate = corpus_commands.add_parser("validate", help="validate a corpus manifest")
+    corpus_validate.add_argument("manifest", type=Path)
+
+    verify = subparsers.add_parser("verify-artifact", help="verify an artifact SHA-256")
+    verify.add_argument("artifact", type=Path)
+    verify.add_argument("--sha256", required=True)
+
+    bundle = subparsers.add_parser(
+        "build-review-bundle",
+        help="create a deterministic non-destructive review archive and checksum",
+    )
+    bundle.add_argument("--input", type=Path, default=Path("artifacts"))
+    bundle.add_argument("--output", type=Path, required=True)
     return parser
 
 
@@ -117,6 +148,7 @@ def main(argv: list[str] | None = None) -> int:
                     collective=args.collective,
                     repetitions=args.repetitions,
                     timeout_s=args.timeout,
+                    sampling_interval_s=args.sampling_interval,
                 )
             )
         elif args.command == "run":
@@ -164,6 +196,45 @@ def main(argv: list[str] | None = None) -> int:
             print(args.output)
         elif args.command == "export":
             print(ArtifactStore(args.input).export(args.output))
+        elif args.command == "corpus":
+            if args.corpus_command == "plan":
+                plans = plan_matrix(args.profile, args.repetitions)
+                _json(
+                    {
+                        "profile": args.profile,
+                        "repetitions": args.repetitions,
+                        "development_dry_run_only": True,
+                        "scientific_gpu_evidence": False,
+                        "planned_runs": [vars(plan) for plan in plans],
+                    }
+                )
+            else:
+                data = json.loads(args.manifest.read_text(encoding="utf-8"))
+                manifest = CorpusManifest.from_dict(data)
+                manifest.validate()
+                _json(
+                    {
+                        "valid": True,
+                        "corpus_id": manifest.corpus_id,
+                        "planned_runs": len(manifest.planned_runs),
+                        "accepted_runs": len(manifest.accepted_run_ids),
+                    }
+                )
+        elif args.command == "verify-artifact":
+            actual = sha256_file(args.artifact)
+            if actual != args.sha256:
+                raise ValueError(f"SHA-256 mismatch: expected={args.sha256} actual={actual}")
+            _json({"verified": True, "artifact": str(args.artifact), "sha256": actual})
+        elif args.command == "build-review-bundle":
+            archive, checksum = ArtifactStore(args.input).export_with_checksum(args.output)
+            _json(
+                {
+                    "archive": str(archive),
+                    "checksum_file": str(checksum),
+                    "sha256": sha256_file(archive),
+                    "source_outputs_preserved": True,
+                }
+            )
         return 0
     except (CommGuardError, ValueError, RuntimeError, OSError) as exc:
         print(f"commguard: {type(exc).__name__}: {exc}", file=sys.stderr)

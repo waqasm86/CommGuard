@@ -110,7 +110,9 @@ def _stats(values: list[float], times: list[float]) -> dict[str, float | None]:
                 "p25",
                 "p50",
                 "p75",
+                "p90",
                 "p95",
+                "mad",
                 "iqr",
                 "range",
                 "cv",
@@ -122,21 +124,91 @@ def _stats(values: list[float], times: list[float]) -> dict[str, float | None]:
     std = statistics.pstdev(values) if len(values) > 1 else 0.0
     p25 = _quantile(values, 0.25)
     p75 = _quantile(values, 0.75)
+    median = _quantile(values, 0.5)
     return {
         "mean": mean,
         "std": std,
         "min": min(values),
         "max": max(values),
         "p25": p25,
-        "p50": _quantile(values, 0.5),
+        "p50": median,
         "p75": p75,
+        "p90": _quantile(values, 0.9),
         "p95": _quantile(values, 0.95),
+        "mad": statistics.median(abs(value - median) for value in values),
         "iqr": p75 - p25,
         "range": max(values) - min(values),
         "cv": std / abs(mean) if mean else None,
         "slope": _slope(values, times),
         "autocorr_lag1": _correlation(values[:-1], values[1:]) if len(values) > 2 else None,
     }
+
+
+def _communication_features(
+    values: list[float],
+    times: list[float],
+    *,
+    threshold: float | None,
+    sample_count: int,
+) -> dict[str, float | int | None]:
+    """Return robust, finite communication features for one complete window."""
+    stats = _stats(values, times)
+    result: dict[str, float | int | None] = {
+        "mean": stats["mean"],
+        "median": stats["p50"],
+        "maximum": stats["max"],
+        "p90": stats["p90"],
+        "p95": stats["p95"],
+        "std": stats["std"],
+        "mad": stats["mad"],
+        "coefficient_of_variation": stats["cv"],
+        "periodicity_lag1_autocorrelation": stats["autocorr_lag1"],
+        "sampling_validity_fraction": len(values) / sample_count if sample_count else 0.0,
+    }
+    if not values or threshold is None:
+        result.update(
+            {
+                "fraction_above_idle_threshold": None,
+                "communication_duty_cycle": None,
+                "burst_count": None,
+                "average_burst_duration_s": None,
+                "maximum_burst_duration_s": None,
+                "longest_consecutive_burst": None,
+                "near_idle_sample_fraction": None,
+            }
+        )
+        return result
+    active = [value > threshold for value in values]
+    runs: list[tuple[int, float]] = []
+    start: int | None = None
+    for index, is_active in enumerate([*active, False]):
+        if is_active and start is None:
+            start = index
+        elif not is_active and start is not None:
+            end = index - 1
+            interval = (
+                statistics.median(
+                    [right - left for left, right in zip(times, times[1:], strict=False)]
+                )
+                if len(times) > 1
+                else 0.0
+            )
+            runs.append((end - start + 1, max(0.0, times[end] - times[start] + interval)))
+            start = None
+    durations = [duration for _, duration in runs]
+    fraction = sum(active) / len(active)
+    result.update(
+        {
+            "fraction_above_idle_threshold": fraction,
+            "communication_duty_cycle": fraction,
+            "burst_count": len(runs),
+            "average_burst_duration_s": statistics.fmean(durations) if durations else 0.0,
+            "maximum_burst_duration_s": max(durations, default=0.0),
+            "longest_consecutive_burst": max((count for count, _ in runs), default=0),
+            "near_idle_sample_fraction": 1.0 - fraction,
+        }
+    )
+    return result
 
 
 def _valid_values(samples: list[dict[str, Any]], field: str) -> tuple[list[float], list[float]]:
@@ -293,6 +365,17 @@ def _feature_window(
         "alignment_max_delta_seconds": max(alignment_deltas),
     }
     values_by_gpu: dict[tuple[int, str], list[float]] = {}
+    communication_by_gpu: dict[int, list[float]] = {}
+    communication_threshold_value = dict(manifest.get("config", {})).get(
+        "communication_threshold_bytes_per_s"
+    )
+    communication_threshold = (
+        float(communication_threshold_value)
+        if isinstance(communication_threshold_value, (int, float))
+        and not isinstance(communication_threshold_value, bool)
+        else None
+    )
+    row["communication_idle_threshold_bytes_per_s"] = communication_threshold
     for gpu in (0, 1):
         for field in TELEMETRY_FIELDS:
             values, times = _valid_values(selected[gpu], field)
@@ -309,12 +392,29 @@ def _feature_window(
         )
         tx, rx = _paired_fields(selected[gpu], "pcie_tx_bytes_per_s", "pcie_rx_bytes_per_s")
         if tx:
-            row[f"gpu{gpu}__pcie_total_mean_bytes_per_s"] = statistics.fmean(
-                first + second for first, second in zip(tx, rx, strict=True)
-            )
+            totals = [first + second for first, second in zip(tx, rx, strict=True)]
+            communication_by_gpu[gpu] = totals
+            origin_ns = int(selected[gpu][0]["monotonic_ns"])
+            total_times = [
+                (int(sample["monotonic_ns"]) - origin_ns) / 1e9
+                for sample in selected[gpu]
+                if sample["fields"]["pcie_tx_bytes_per_s"]["supported"]
+                and sample["fields"]["pcie_rx_bytes_per_s"]["supported"]
+                and sample["fields"]["pcie_tx_bytes_per_s"]["value"] is not None
+                and sample["fields"]["pcie_rx_bytes_per_s"]["value"] is not None
+            ]
+            for feature_name, value in _communication_features(
+                totals,
+                total_times,
+                threshold=communication_threshold,
+                sample_count=len(selected[gpu]),
+            ).items():
+                row[f"gpu{gpu}__pcie_total__{feature_name}"] = value
+            row[f"gpu{gpu}__pcie_total_mean_bytes_per_s"] = statistics.fmean(totals)
             rx_mean = statistics.fmean(rx)
             row[f"gpu{gpu}__pcie_tx_rx_ratio"] = statistics.fmean(tx) / rx_mean if rx_mean else None
         else:
+            communication_by_gpu[gpu] = []
             row[f"gpu{gpu}__pcie_total_mean_bytes_per_s"] = None
             row[f"gpu{gpu}__pcie_tx_rx_ratio"] = None
     for field in TELEMETRY_FIELDS:
@@ -337,6 +437,21 @@ def _feature_window(
             row[f"cross_gpu__{field}__normalized_divergence"] = None
             row[f"cross_gpu__{field}__correlation"] = None
             row[f"cross_gpu__{field}__lag1_correlation"] = None
+    total_left = communication_by_gpu[0]
+    total_right = communication_by_gpu[1]
+    paired_count = min(len(total_left), len(total_right))
+    if paired_count:
+        left_values = total_left[:paired_count]
+        right_values = total_right[:paired_count]
+        row["cross_gpu__pcie_total__correlation"] = _correlation(left_values, right_values)
+        difference = statistics.fmean(
+            abs(left - right) for left, right in zip(left_values, right_values, strict=True)
+        )
+        scale = statistics.fmean(abs(value) for value in left_values + right_values)
+        row["cross_gpu__pcie_total__asymmetry"] = difference / scale if scale else 0.0
+    else:
+        row["cross_gpu__pcie_total__correlation"] = None
+        row["cross_gpu__pcie_total__asymmetry"] = None
     return row
 
 

@@ -244,6 +244,75 @@ def test_node_loss_causes_staleness_and_detector_abstention(tmp_path) -> None:
     assert decision.score is None
 
 
+def test_two_rank_agents_on_one_physical_node_and_rank_loss_abstention(tmp_path) -> None:
+    clock = FakeClock()
+    registrations = {
+        "rank-agent-0": AgentRegistration("rank-agent-0", "kaggle-node", b"rank-0"),
+        "rank-agent-1": AgentRegistration("rank-agent-1", "kaggle-node", b"rank-1"),
+    }
+    service = CentralIngestionService(
+        registrations,
+        experiment_session_id="session-single-node",
+        expected_nodes=("kaggle-node",),
+        stale_after_seconds=10,
+        clock=clock,
+    )
+    transport = OfflineFileTransport(tmp_path / "single-node", service)
+
+    class RankBackend(FakeBackend):
+        def __init__(self, rank: int) -> None:
+            super().__init__(clock, float(rank * 100))
+            self.rank = rank
+
+        def collect(self) -> tuple[dict, ...]:
+            sample = dict(super().collect()[self.rank])
+            sample.update({"rank": self.rank, "process_id": 1000 + self.rank})
+            return (sample,)
+
+    agents = {
+        agent_id: NodeAgent(
+            agent_id=agent_id,
+            node_id="kaggle-node",
+            experiment_session_id="session-single-node",
+            hmac_secret=registration.hmac_secret,
+            backend=RankBackend(rank),
+            transport=transport,
+            clock=clock,
+            configuration_hash="a" * 64,
+        )
+        for rank, (agent_id, registration) in enumerate(registrations.items())
+    }
+    for agent in agents.values():
+        agent.collect_once()
+        assert agent.flush()[0].accepted
+    complete = service.aggregate_window(
+        (clock() - timedelta(seconds=1)).isoformat(),
+        (clock() + timedelta(seconds=1)).isoformat(),
+    )
+    assert complete["complete"] is True
+    assert set(complete["agents"]) == {"rank-agent-0", "rank-agent-1"}
+    assert complete["prototype_scope"] == "single_node_dual_gpu"
+
+    clock.advance(11)
+    assert agents["rank-agent-0"].heartbeat().accepted
+    incomplete = service.aggregate_window(
+        (clock() - timedelta(seconds=20)).isoformat(),
+        (clock() + timedelta(seconds=1)).isoformat(),
+    )
+    assert incomplete["complete"] is False
+    assert incomplete["missing_or_stale_agents"] == ["rank-agent-1"]
+    decision = DetectorService(
+        lambda _: 0.9,
+        threshold=0.5,
+        abstention_margin=0.1,
+        model_name="test",
+        model_version="test",
+        clock=clock,
+    ).decide(incomplete)
+    assert decision.abstained is True
+    assert decision.score is None
+
+
 def test_agent_retains_buffer_when_transport_fails() -> None:
     clock = FakeClock()
 

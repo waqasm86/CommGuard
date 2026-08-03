@@ -8,6 +8,8 @@ from commguard.exceptions import ValidationError
 from commguard.schemas import (
     CURRENT_SCHEMA_VERSION,
     FIELD_UNITS,
+    LEGACY_SCHEMA_VERSION,
+    LEGACY_TELEMETRY_FIELDS,
     TELEMETRY_FIELDS,
     FieldReading,
     TelemetrySample,
@@ -26,6 +28,14 @@ def sample() -> TelemetrySample:
         fields={
             name: FieldReading(value=1.0, unit=FIELD_UNITS[name], supported=True)
             for name in TELEMETRY_FIELDS
+        },
+        target_sampling_interval_s=1.0,
+        rank=0,
+        process_id=123,
+        raw_unit_metadata={
+            "pcie_nvml_raw_unit": "KB/second (NVML API)",
+            "pcie_bytes_multiplier": 1024,
+            "pcie_conversion_convention": "1 NVML KB = 1024 bytes",
         },
     )
 
@@ -48,11 +58,27 @@ def test_telemetry_round_trip() -> None:
     assert restored == original
 
 
-def test_telemetry_requires_exactly_nine_fields() -> None:
+def test_current_telemetry_requires_complete_field_set() -> None:
     data = sample().to_dict()
     data["fields"].pop("pcie_rx_bytes_per_s")
-    with pytest.raises(ValidationError, match="expected exactly"):
+    with pytest.raises(ValidationError, match="schema-compatible"):
         TelemetrySample.from_dict(data)
+
+
+def test_legacy_nine_field_telemetry_remains_readable() -> None:
+    data = sample().to_dict()
+    data["schema_version"] = LEGACY_SCHEMA_VERSION
+    data["fields"] = {name: data["fields"][name] for name in LEGACY_TELEMETRY_FIELDS}
+    for name in (
+        "target_sampling_interval_s",
+        "actual_sampling_interval_s",
+        "sampling_jitter_s",
+        "rank",
+        "process_id",
+        "raw_unit_metadata",
+    ):
+        data.pop(name)
+    assert TelemetrySample.from_dict(data).schema_version == LEGACY_SCHEMA_VERSION
 
 
 def test_split_assignment_contract_is_actionable() -> None:

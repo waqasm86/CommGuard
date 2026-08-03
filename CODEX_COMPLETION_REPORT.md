@@ -1,5 +1,10 @@
 # CommGuard research-completion and pre-Kaggle audit report
 
+> Historical completion record for the 2026-08-02 branch. The current prototype
+> completion status is maintained in
+> `CODEX_KAGGLE_PROTOTYPE_COMPLETION_REPORT.md`; this file is not rewritten as
+> evidence of the later workflow.
+
 Completed locally: 2026-08-02 (Asia/Karachi)
 
 Branch: `codex/fix-calibration-idle-and-kaggle-workflow`

@@ -1,5 +1,20 @@
 # Methodology
 
+The full calibration protocol uses five repetitions of idle and AllReduce at
+1, 4, 16, 64, and 128 MiB at one selected supported interval. A bounded idle
+collector study compares 1.0, 0.5, and 0.2 second polling and records jitter and
+collector duty/overhead. The capture gate defaults to an idle median plus three
+MAD with an explicit floor. The accepted sensitivity range is
+payload-specific; a small-payload miss does not silently become universal
+support or universal failure.
+
+Feature engineering aggregates complete runs for exported research tables and
+preserves `communication_only`, `auxiliary_only`, and
+`communication_plus_auxiliary`. The primary binary task is training versus
+inference. Controls remain a separate diagnostic class and are never relabeled
+as inference. A secondary shallow-tree diagnostic reports training versus
+inference versus control with an explicit three-class confusion matrix.
+
 The primary unit is a complete run. Windows from a run never cross splits.
 Startup is explicitly excluded by default and can be analyzed separately.
 Standard profiles use at least three repetitions and randomize bounded run
@@ -15,19 +30,27 @@ failure; environment fingerprints are never grouping keys. Family and
 configuration holdouts are separate diagnostics and may explicitly have a
 one-class test partition, in which case balanced metrics are undefined.
 
-Sampling defaults to 1 Hz. The collector records actual intervals, jitter,
-overruns, field missingness, and a conservative sampler duty fraction. Short
-controls can compare 1, 2, and 10 Hz; this is not enabled during normal runs.
+The SDK also exposes complete-group GroupKFold and LeaveOneGroupOut planners.
+They group by run for window-safe cross-validation or by true experiment
+session for leave-one-session-out diagnostics. No fold may split a run. These
+folds supplement the predefined train/validation/test protocol and are used only
+when the available group count and class coverage make metrics meaningful.
 
-Calibration records three idle-baseline observations and three repetitions at
-each of 1, 4, 16, and 64 MiB in the standard path. Its idle-relative capture
+Sampling calibration compares 1.0, 0.5, and 0.2 second intervals. The collector
+records actual intervals, jitter, overruns, field missingness, and a conservative
+sampler duty fraction. The optional 0.1-second interval remains diagnostic until
+its overhead and jitter are measured.
+
+Calibration records five idle-baseline observations and five repetitions at
+each of 1, 4, 16, 64, and 128 MiB in the full path. Its idle-relative capture
 threshold, per-payload 80% capture rate, minimum repetitions, rank correlation,
 and dynamic-range criteria are specified in
 [`nvidia-calibration.md`](nvidia-calibration.md). Per-payload summaries also
 report mean, median absolute deviation, and coefficient of variation. These
 thresholds are pragmatic gates, not universal physical laws. Calibration can be
-`supported`, `partially_supported` (inconclusive), or `not_supported`; partial
-support applies only to the reported reliable payload groups. Missing idle data
+`supported`, `partially_supported`, `inconclusive`, `not_supported`, or
+`failed`; partial support applies only to the reported reliable payload groups,
+while inconclusive means the evidence cannot decide support. Missing idle data
 or one-shot payloads cannot support new evidence. Calibration failure prevents
 standard/extended detector collection unless explicit negative-calibration
 research mode is selected.
@@ -60,8 +83,9 @@ telemetry sample.
 
 Features include distribution summaries, variation, slopes, autocorrelation,
 idle/duty fractions, PCIe totals/ratios, missingness, cross-GPU divergence, and
-cross-correlation. Evaluation compares majority, simple PCIe rule, logistic
-regression, and random forest with PCIe-only, non-PCIe, and combined ablations.
+cross-correlation. Evaluation compares mean-communication and duty-cycle
+thresholds, logistic regression, a shallow decision tree, and one secondary
+random forest across communication-only, auxiliary-only, and combined sets.
 It reports window and run metrics, per-family errors, uncalibrated probability
 quality diagnostics, and an abstention region.
 

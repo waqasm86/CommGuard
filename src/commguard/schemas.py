@@ -18,7 +18,7 @@ CURRENT_SCHEMA_VERSION = "2.0"
 # envelopes directly. New research manifests use CURRENT_SCHEMA_VERSION.
 SCHEMA_VERSION = LEGACY_SCHEMA_VERSION
 SUPPORTED_SCHEMA_VERSIONS = frozenset({LEGACY_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION})
-TELEMETRY_FIELDS = (
+LEGACY_TELEMETRY_FIELDS = (
     "gpu_utilization_pct",
     "memory_utilization_pct",
     "memory_used_bytes",
@@ -29,10 +29,14 @@ TELEMETRY_FIELDS = (
     "pcie_tx_bytes_per_s",
     "pcie_rx_bytes_per_s",
 )
+TELEMETRY_FIELDS = (
+    LEGACY_TELEMETRY_FIELDS[:3] + ("memory_total_bytes",) + LEGACY_TELEMETRY_FIELDS[3:]
+)
 FIELD_UNITS = {
     "gpu_utilization_pct": "percent",
     "memory_utilization_pct": "percent",
     "memory_used_bytes": "bytes",
+    "memory_total_bytes": "bytes",
     "power_draw_w": "watts",
     "temperature_c": "celsius",
     "sm_clock_mhz": "MHz",
@@ -124,7 +128,13 @@ class TelemetrySample:
     wall_time_utc: str
     monotonic_ns: int
     fields: Mapping[str, FieldReading]
-    schema_version: str = SCHEMA_VERSION
+    target_sampling_interval_s: float | None = None
+    actual_sampling_interval_s: float | None = None
+    sampling_jitter_s: float | None = None
+    rank: int | None = None
+    process_id: int | None = None
+    raw_unit_metadata: Mapping[str, Any] = field(default_factory=dict)
+    schema_version: str = CURRENT_SCHEMA_VERSION
     artifact_kind: str = "telemetry_sample"
 
     def validate(self) -> None:
@@ -134,12 +144,43 @@ class TelemetrySample:
         _require(self.sequence >= 0, "sequence", "must be non-negative")
         _require(self.monotonic_ns >= 0, "monotonic_ns", "must be non-negative")
         _utc_timestamp(self.wall_time_utc, "wall_time_utc")
-        actual = set(self.fields)
-        expected = set(TELEMETRY_FIELDS)
-        _require(actual == expected, "fields", f"expected exactly {sorted(expected)}")
+        actual = frozenset(self.fields)
+        valid_field_sets = {frozenset(TELEMETRY_FIELDS)}
+        if self.schema_version == LEGACY_SCHEMA_VERSION:
+            valid_field_sets.add(frozenset(LEGACY_TELEMETRY_FIELDS))
+        _require(
+            actual in valid_field_sets,
+            "fields",
+            f"expected a schema-compatible field set; observed {sorted(actual)}",
+        )
         for name, reading in self.fields.items():
             reading.validate(f"fields.{name}")
             _require(reading.unit == FIELD_UNITS[name], f"fields.{name}.unit", "unexpected unit")
+        if self.schema_version == CURRENT_SCHEMA_VERSION:
+            _require(
+                self.target_sampling_interval_s is not None and self.target_sampling_interval_s > 0,
+                "target_sampling_interval_s",
+                "must be positive for current telemetry",
+            )
+            for name in ("actual_sampling_interval_s", "sampling_jitter_s"):
+                value = getattr(self, name)
+                _require(
+                    value is None or (math.isfinite(value) and value >= 0),
+                    name,
+                    "must be null or finite and non-negative",
+                )
+            _require(self.rank is not None and self.rank >= 0, "rank", "must be non-negative")
+            _require(
+                self.process_id is not None and self.process_id > 0,
+                "process_id",
+                "must be positive",
+            )
+            _require(
+                self.raw_unit_metadata.get("pcie_nvml_raw_unit") == "KB/second (NVML API)"
+                and self.raw_unit_metadata.get("pcie_bytes_multiplier") == 1024,
+                "raw_unit_metadata",
+                "must preserve the NVML PCIe conversion",
+            )
 
     def to_dict(self) -> dict[str, Any]:
         self.validate()
@@ -158,6 +199,12 @@ class TelemetrySample:
                 name: FieldReading.from_dict(value)
                 for name, value in dict(data.get("fields", {})).items()
             },
+            target_sampling_interval_s=data.get("target_sampling_interval_s"),
+            actual_sampling_interval_s=data.get("actual_sampling_interval_s"),
+            sampling_jitter_s=data.get("sampling_jitter_s"),
+            rank=data.get("rank"),
+            process_id=data.get("process_id"),
+            raw_unit_metadata=dict(data.get("raw_unit_metadata", {})),
             schema_version=str(data.get("schema_version", "")),
             artifact_kind=str(data.get("artifact_kind", "")),
         )
@@ -566,6 +613,7 @@ def validate_artifact(data: Mapping[str, Any]) -> None:
                 "calibration_result",
                 (
                     "calibration_contract_version",
+                    "result_state",
                     "legacy_compatibility_applied",
                     "modern_capture_gate_passed",
                     "decision_state",
@@ -581,6 +629,18 @@ def validate_artifact(data: Mapping[str, Any]) -> None:
                     "environment_fingerprint",
                     "source_commit",
                 ),
+            )
+            _require(
+                data["result_state"]
+                in {
+                    "supported",
+                    "partially_supported",
+                    "inconclusive",
+                    "not_supported",
+                    "failed",
+                },
+                "result_state",
+                "must be a supported calibration result state",
             )
             _require(
                 data["calibration_contract_version"] == "idle-aware-repeated-v2",

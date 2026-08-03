@@ -1,5 +1,9 @@
 # Reviewer, push, and Kaggle handoff
 
+> Superseded for the Kaggle prototype completion by
+> `delivery/KAGGLE_PROTOTYPE_HANDOFF.md`. This file preserves the prior branch's
+> handoff record.
+
 ## Inspect locally
 
 ```bash

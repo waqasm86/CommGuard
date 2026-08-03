@@ -25,6 +25,7 @@ Issues = "https://github.com/waqasm86/CommGuard/issues"
 
 [project.optional-dependencies]
 analysis = [
+  "matplotlib>=3.9",
   "numpy>=2.0",
   "pandas>=2.3",
   "scikit-learn>=1.6",

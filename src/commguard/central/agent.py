@@ -22,7 +22,11 @@ class AgentTransport(Protocol):
     def send(self, message: dict[str, Any]) -> IngestionAck: ...
 
 
-def protocol_sample(sample: TelemetrySample | dict[str, Any]) -> dict[str, Any]:
+def protocol_sample(
+    sample: TelemetrySample | dict[str, Any],
+    *,
+    configuration_hash: str,
+) -> dict[str, Any]:
     payload = sample.to_dict() if isinstance(sample, TelemetrySample) else dict(sample)
     fields = payload.get("fields")
     if not isinstance(fields, dict):
@@ -33,6 +37,17 @@ def protocol_sample(sample: TelemetrySample | dict[str, Any]) -> dict[str, Any]:
         "monotonic_ns": int(payload["monotonic_ns"]),
         "gpu_index": int(payload["gpu_index"]),
         "gpu_uuid": str(payload["gpu_uuid"]),
+        "sequence_number": int(payload.get("sequence_number", payload.get("sequence", 0))),
+        "rank": int(payload.get("rank", payload["gpu_index"])),
+        "process_id": int(payload.get("process_id", 1)),
+        "configuration_hash": configuration_hash,
+        "validity_flags": dict(payload.get("validity_flags", {"sample_valid": True})),
+        "telemetry_support_flags": dict(
+            payload.get(
+                "telemetry_support_flags",
+                {name: bool(reading.get("supported")) for name, reading in fields.items()},
+            )
+        ),
         "fields": fields,
     }
 
@@ -49,6 +64,7 @@ class NodeAgent:
         transport: AgentTransport,
         clock: Callable[[], datetime] | None = None,
         monotonic_ns: Callable[[], int] = time.monotonic_ns,
+        configuration_hash: str = "unconfigured-local-prototype",
     ) -> None:
         if not agent_id or not node_id or not experiment_session_id or not hmac_secret:
             raise ValueError("node agent requires identity, session, and HMAC secret")
@@ -60,6 +76,9 @@ class NodeAgent:
         self.transport = transport
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.monotonic_ns = monotonic_ns
+        if not configuration_hash:
+            raise ValueError("configuration_hash must be non-empty")
+        self.configuration_hash = configuration_hash
         self.next_sequence = 0
         self.last_batch_id: str | None = None
         self.pending: list[dict[str, Any]] = []
@@ -71,7 +90,10 @@ class NodeAgent:
 
     def collect_once(self) -> str:
         started_ns = self.monotonic_ns()
-        samples = tuple(protocol_sample(sample) for sample in self.backend.collect())
+        samples = tuple(
+            protocol_sample(sample, configuration_hash=self.configuration_hash)
+            for sample in self.backend.collect()
+        )
         validate_telemetry_samples(samples)
         ended_ns = self.monotonic_ns()
         batch_id = f"batch-{uuid.uuid4().hex}"

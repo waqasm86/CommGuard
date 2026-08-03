@@ -24,6 +24,7 @@ CALIBRATION_COLLECTIVES = frozenset(
 _CALIBRATION_WORKLOAD = re.compile(
     r"^collective_(all_reduce|broadcast|all_gather|reduce_scatter|send_recv)_([1-9][0-9]*)mib$"
 )
+_PERIODIC_LOCAL_SGD_WORKLOAD = re.compile(r"^adversarial_periodic_local_sgd_k(1|2|4|8|16)$")
 
 BASE_MODEL = {
     "vocab_size": 2048,
@@ -46,16 +47,17 @@ BASE_MODEL = {
 
 WORKLOADS: dict[str, dict[str, Any]] = {
     "calibration_idle": {
-        "config_id": "calibration-idle-15s-v1",
+        "config_id": "calibration-idle-30s-v2",
         "mode": "idle",
         "label": "calibration",
         "family": "calibration_idle",
         "designation": "calibration",
-        "min_measured_seconds": 15.0,
+        "min_measured_seconds": 30.0,
         "iteration_cap": None,
         "idle_interval_s": 0.25,
-        "estimated_seconds": 15,
-        "warmup_seconds": 0.0,
+        "estimated_seconds": 40,
+        "warmup_seconds": 5.0,
+        "cooldown_seconds": 5.0,
     },
     "collective_all_reduce_1mib": {
         "config_id": "calibration-all-reduce-1mib-v1",
@@ -68,8 +70,11 @@ WORKLOADS: dict[str, dict[str, Any]] = {
         "iterations": 20,
         "burst_iterations": 10,
         "iteration_interval_s": 0.25,
-        "estimated_seconds": 15,
-        "warmup_seconds": 0.0,
+        "min_measured_seconds": 30.0,
+        "iteration_cap": None,
+        "estimated_seconds": 40,
+        "warmup_seconds": 5.0,
+        "cooldown_seconds": 5.0,
     },
     "ddp_train": {
         **BASE_MODEL,
@@ -513,6 +518,17 @@ def get_workload(name: str) -> dict[str, Any]:
     try:
         return deepcopy(WORKLOADS[name])
     except KeyError:
+        periodic_match = _PERIODIC_LOCAL_SGD_WORKLOAD.fullmatch(name)
+        if periodic_match is not None:
+            local_steps = int(periodic_match.group(1))
+            config = deepcopy(WORKLOADS["adversarial_periodic_local_sgd"])
+            config.update(
+                {
+                    "config_id": f"periodic-local-sgd-k{local_steps}-v2",
+                    "local_steps": local_steps,
+                }
+            )
+            return config
         match = _CALIBRATION_WORKLOAD.fullmatch(name)
         if match is None:
             raise ValueError(f"unknown workload {name!r}") from None

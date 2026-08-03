@@ -1,5 +1,10 @@
 # Current results and coverage failure analysis
 
+> The completed local work is implementation, CPU/static validation, packaging,
+> and notebook generation. The new full 30-run calibration, 24-run corpus,
+> detector evaluation, and periodic-synchronization study have **not** been run
+> on Kaggle and have no new metrics. Code readiness is not empirical validation.
+
 ## Bottom line
 
 CommGuard has not established reliable training-versus-inference detection.
