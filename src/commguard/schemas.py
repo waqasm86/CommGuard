@@ -518,7 +518,7 @@ def validate_artifact(data: Mapping[str, Any]) -> None:
                 "source_dirty",
                 "must be a boolean",
             )
-            
+
     elif kind == "feature_row":
         _require_fields(
             data,
@@ -561,11 +561,11 @@ def validate_artifact(data: Mapping[str, Any]) -> None:
                 "workload_config_id",
             ):
                 _require(bool(data[name]), name, "must be non-empty")
-            
+
             # Fixed: Handle the aligned_sample_pairs validation properly
             aligned_pairs = data.get("aligned_sample_pairs")
             _require(aligned_pairs is not None, "aligned_sample_pairs", "must be non-empty")
-            
+
             # Convert to int safely
             try:
                 pairs = int(cast(int, aligned_pairs))
@@ -573,7 +573,7 @@ def validate_artifact(data: Mapping[str, Any]) -> None:
                 _require(False, "aligned_sample_pairs", "must be convertible to int")
             else:
                 _require(pairs >= 2, "aligned_sample_pairs", "too few (must be >= 2)")
-            
+
     elif kind == "split_assignment":
         _require_fields(data, "split_assignment", ("run_id", "split"))
         _require(

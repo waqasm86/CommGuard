@@ -162,7 +162,7 @@ class CorpusManifest:
             if isinstance(source_dirty_value, bool)
             else False
         )
-        
+
         return cls(
             corpus_id=str(data.get("corpus_id", "")),
             collection_id=str(data.get("collection_id", "")),
