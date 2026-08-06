@@ -52,7 +52,7 @@ def _terminate_tree(process: subprocess.Popen[str], grace_s: float = 5.0) -> boo
     cleaned = False
     if process.poll() is not None:
         return True
-    
+
     try:
         _terminate_process_group(process)
         process.wait(timeout=grace_s)

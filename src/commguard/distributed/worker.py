@@ -58,7 +58,7 @@ def _gpu_uuid(local_rank: int) -> str:
     nvidia_smi_cmd = "nvidia-smi"
     if sys.platform == "win32":
         nvidia_smi_cmd = "nvidia-smi.exe"
-    
+
     result = subprocess.run(
         [
             nvidia_smi_cmd,
