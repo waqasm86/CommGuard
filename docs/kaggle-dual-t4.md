@@ -9,7 +9,7 @@ source archive, then a public pinned Git commit. No private token is required.
 3. Select the `GPU T4 x2` accelerator.
 4. Import the four notebooks listed in
    [`NEXT_KAGGLE_EXPERIMENTS.md`](NEXT_KAGGLE_EXPERIMENTS.md).
-5. Start with `commguard_calibration_v3.ipynb` and run from the first cell.
+5. Start with `commguard_calibration_v4.ipynb` and run from the first cell.
 
 Do not reuse the first failed calibration-v3 archive. That T4 x2 attempt reached
 CUDA/NCCL and collectives, but worker mode `idle` was absent, every idle run

@@ -1,6 +1,6 @@
 # Next Kaggle experiments
 
-Start with `commguard_calibration_v3.ipynb` in smoke mode, then use a fresh
+Start with `commguard_calibration_v4.ipynb` in smoke mode, then use a fresh
 workspace in full mode. Full calibration plans 30 runs: five idle repetitions
 and five repetitions for each 1, 4, 16, 64, and 128 MiB payload. The first
 expected archive is `commguard-calibration-prototype-<timestamp>.tar.gz`.
@@ -19,7 +19,7 @@ directory after inserting the final pushed commit below.
 
 Run the notebooks in this order on a Kaggle `GPU T4 x2` accelerator:
 
-1. `commguard_calibration_v3.ipynb` measures five idle repetitions and five
+1. `commguard_calibration_v4.ipynb` measures five idle repetitions and five
    collective repetitions at 1, 4, 16, 64, and 128 MiB for each selected
    standard sampling interval, then exports the calibration evidence bundle
    and its exact artifact hash/reference.
@@ -52,3 +52,21 @@ For the rerun, use a fresh Kaggle copy, insert the final remote-visible
 40-character patch commit, select `GPU T4 x2`, and run the calibration notebook
 exactly once from its first cell. Share its executed notebook, `.tar.gz`, and
 `.sha256` before any benign collection begins.
+
+## Confirmatory calibration-v4 decision
+
+Calibration-v3 at a 0.5-second interval completed operationally but was not
+accepted. It produced a `partially_supported` result because the 1 MiB group
+passed the repetition-aware capture threshold in only two of five
+repetitions. The supported range was 4–128 MiB.
+
+The diagnostic 0.2-second sampling study passed its tested payload groups,
+but it did not test the critical 1 MiB group. Therefore, the next scientific
+execution is one full calibration-v4 run using:
+
+- 0.2-second sampling;
+- five idle repetitions;
+- five repetitions at 1, 4, 16, 64, and 128 MiB;
+- 30 total observations.
+
+Do not run the benign corpus until all five acceptance fields pass.

@@ -55,7 +55,7 @@ NCCL. There is no CPU, Gloo, or one-GPU evidence fallback.
 
 ## 4. Run calibration smoke mode
 
-Open `notebooks/commguard_calibration_v3.ipynb`, set `RUN_MODE="smoke"`, and run
+Open `notebooks/commguard_calibration_v4.ipynb`, set `RUN_MODE="smoke"`, and run
 all cells. This short run is labeled:
 
 ```text
@@ -212,3 +212,24 @@ evaluation. Until those artifacts exist, cross-session validation is pending.
 - **Archive export failure:** preserve the source artifact tree, choose a new
   output archive path, check free space, and rerun export. Never delete source
   outputs to make an archive succeed.
+
+## Calibration-v4 confirmatory execution
+
+The current active calibration is `commguard_calibration_v4.ipynb`.
+
+Run it in two separate fresh Kaggle sessions:
+
+1. Smoke mode using `RUN_MODE = "smoke"`.
+2. Full mode using `RUN_MODE = "full"`.
+
+The full configuration must print:
+
+- sampling interval: 0.2 seconds;
+- idle repetitions: 5;
+- payloads: 1, 4, 16, 64, and 128 MiB;
+- repetitions per payload: 5;
+- total observations: 30.
+
+The smoke run must remain scientifically ineligible. The full result unlocks
+the benign corpus only when it is eligible, accepted, supported, passes the
+modern capture gate, and records clean source provenance.

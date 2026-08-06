@@ -10,9 +10,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 NOTEBOOK_ROOT = ROOT / "notebooks"
 REPOSITORY_URL = "https://github.com/waqasm86/CommGuard.git"
-POLICY_VERSION = "commguard-notebook-policy-v3"
+POLICY_VERSION = "commguard-notebook-policy-v4"
 SCOPE_DECLARATION = (
-    "CommGuard’s Kaggle workflow is a single-node, dual-NVIDIA-T4 research prototype. "
+    "CommGuard's Kaggle workflow is a single-node, dual-NVIDIA-T4 research prototype. "
     "It validates experimental methodology and software behavior on two local GPU ranks. "
     "It does not establish generalization to two physical 8-GPU nodes, NVLink/NVSwitch "
     "fabrics, RoCE or InfiniBand networks, large frontier-model workloads, or production "
@@ -300,7 +300,7 @@ print(
 """
 
 
-def calibration_notebook() -> list[dict[str, object]]:
+def calibration_v3_notebook() -> list[dict[str, object]]:
     return [
         markdown(
             "cal-title",
@@ -510,6 +510,247 @@ print(
     ]
 
 
+def calibration_v4_notebook() -> list[dict[str, object]]:
+    return [
+        markdown(
+            "cal-title",
+            "# CommGuard calibration v4\n\n"
+            "Canonical dual-T4 confirmatory calibration source. It uses the prospectively selected "
+            "0.2-second telemetry interval after calibration-v3 showed partial support at "
+            "0.5 seconds. It records environment and bounded collective observations; it "
+            "makes no detector claim. Run with Internet enabled only for an immutable Git "
+            "fetch, and never add credentials to this notebook.\n\n"
+            f"> **Prototype scope:** {SCOPE_DECLARATION}\n",
+        ),
+        code("cal-source", source_setup("commguard_calibration_v4")),
+        code(
+            "cal-hardware",
+            """import shutil
+
+if shutil.which("nvidia-smi") is None:
+    raise RuntimeError("nvidia-smi is required for the strict dual-T4 calibration.")
+gpu_query = subprocess.run(
+    [
+        "nvidia-smi",
+        "--query-gpu=index,name,memory.total,compute_cap",
+        "--format=csv,noheader,nounits",
+    ],
+    check=True,
+    capture_output=True,
+    text=True,
+)
+GPU_SUMMARY = []
+for line in gpu_query.stdout.splitlines():
+    index, name, memory_mib, compute_capability = [part.strip() for part in line.split(",")]
+    GPU_SUMMARY.append({
+        "index": int(index),
+        "name": name,
+        "memory_total_mib": int(memory_mib),
+        "compute_capability": compute_capability,
+    })
+if len(GPU_SUMMARY) != 2 or any("T4" not in gpu["name"] for gpu in GPU_SUMMARY):
+    raise RuntimeError(f"Expected exactly two Tesla T4 GPUs, observed: {GPU_SUMMARY}")
+import torch
+
+if not torch.cuda.is_available() or torch.cuda.device_count() != 2:
+    raise RuntimeError("PyTorch must expose exactly two CUDA devices.")
+if not torch.distributed.is_nccl_available():
+    raise RuntimeError("The reviewed PyTorch build does not expose NCCL.")
+print({
+    "gpus": GPU_SUMMARY,
+    "torch_version": torch.__version__,
+    "cuda_version": torch.version.cuda,
+    "nccl_available": torch.distributed.is_nccl_available(),
+})
+""",
+        ),
+        code(
+            "cal-workspace",
+            """from datetime import datetime, timezone
+
+NOTEBOOK_RUN_ID = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+ARTIFACTS = Path(f"/kaggle/working/commguard-calibration-v4-{NOTEBOOK_RUN_ID}")
+if ARTIFACTS.exists():
+    raise RuntimeError(
+        f"Refusing reused calibration workspace {ARTIFACTS}; create a new NOTEBOOK_RUN_ID."
+    )
+ARTIFACTS.mkdir(parents=True, exist_ok=False)
+write_probe = ARTIFACTS / ".write-probe"
+with write_probe.open("x", encoding="utf-8") as stream:
+    stream.write("writable\\n")
+write_probe.unlink()
+print({"notebook_run_id": NOTEBOOK_RUN_ID, "artifact_workspace": ARTIFACTS.name})
+""",
+        ),
+        code(
+            "cal-bootstrap",
+            """from commguard.artifacts import ArtifactStore
+from commguard.schemas import CURRENT_SCHEMA_VERSION, SCHEMA_VERSION
+
+ArtifactStore(ARTIFACTS).initialize()
+BOOTSTRAP = {
+    "artifact_kind": "experiment_summary",
+    "schema_version": SCHEMA_VERSION,
+    "summary_type": "notebook_bootstrap",
+    "notebook_version": NOTEBOOK_VERSION,
+    "notebook_run_id": NOTEBOOK_RUN_ID,
+    "reviewed_commit": REVIEWED_COMMIT,
+    "source_repository": "commguard-source",
+    "gpu_summary": GPU_SUMMARY,
+    "artifact_schema_version": CURRENT_SCHEMA_VERSION,
+}
+ArtifactStore(ARTIFACTS).write_json("environment/notebook-bootstrap.json", BOOTSTRAP)
+print(BOOTSTRAP)
+""",
+        ),
+        code(
+            "cal-context",
+            context_cell(
+                "commguard_calibration_v4",
+                "calibration-v4",
+                False,
+                run_id_predefined=True,
+            ),
+        ),
+        code(
+            "cal-run",
+            """from commguard.orchestrator import run_calibration_sweep
+from commguard.telemetry import compare_sampling_intervals
+
+RUN_MODE = "smoke"  # "smoke" or "full"
+if RUN_MODE not in {"smoke", "full"}:
+    raise RuntimeError("RUN_MODE must be smoke or full.")
+DEVELOPMENT_SMOKE_ONLY = RUN_MODE == "smoke"
+if SOURCE_DIRTY and RUN_MODE != "smoke":
+    raise RuntimeError("Dirty editable source is restricted to RUN_MODE='smoke'.")
+DEVELOPMENT_SMOKE_ONLY = DEVELOPMENT_SMOKE_ONLY or DIRTY_SOURCE_SMOKE_ONLY
+PAYLOADS = (16,) if DEVELOPMENT_SMOKE_ONLY else (1, 4, 16, 64, 128)
+REPETITIONS = 1 if DEVELOPMENT_SMOKE_ONLY else 5
+SAMPLING_INTERVAL_S = 0.2
+SAMPLING_COMPARISON = compare_sampling_intervals(
+    f"sampling-{NOTEBOOK_RUN_ID}",
+    intervals_s=(1.0, 0.5, 0.2),
+    duration_s=3.0 if DEVELOPMENT_SMOKE_ONLY else 10.0,
+)
+print({
+    "run_mode": RUN_MODE,
+    "development_smoke_only": DEVELOPMENT_SMOKE_ONLY,
+    "scientific_acceptance_eligible": not DEVELOPMENT_SMOKE_ONLY,
+    "idle_repetitions": REPETITIONS,
+    "collective": "all_reduce",
+    "sampling_interval_s": SAMPLING_INTERVAL_S,
+    "payload_mib": list(PAYLOADS),
+    "total_runs": REPETITIONS * (1 + len(PAYLOADS)),
+})
+CALIBRATION = run_calibration_sweep(
+    output=ARTIFACTS,
+    payload_mib=PAYLOADS,
+    repetitions=REPETITIONS,
+    sampling_interval_s=SAMPLING_INTERVAL_S,
+    timeout_s=180.0,
+    provenance=CONTEXT,
+    progress_callback=lambda event: print({"calibration_progress": event}),
+    development_smoke_only=DEVELOPMENT_SMOKE_ONLY,
+)
+print({
+    "status": CALIBRATION["status"],
+    "result_state": CALIBRATION["result_state"],
+    "decision_state": CALIBRATION["decision_state"],
+    "idle_usable_repetitions": CALIBRATION["idle_baseline_usable_repetitions"],
+    "payload_summaries": CALIBRATION["payload_summaries"],
+    "standard_sweep_validation": CALIBRATION["standard_sweep_validation"],
+    "exact_calibration_reference_for_next_notebook": CALIBRATION["reference"],
+})
+""",
+        ),
+        code(
+            "cal-package",
+            """from commguard.artifacts import materialize_calibration_package
+
+CALIBRATION_PACKAGE = materialize_calibration_package(
+    ARTIFACTS,
+    CALIBRATION,
+    SAMPLING_COMPARISON,
+    environment=ENVIRONMENT,
+    provenance={**CONTEXT.to_dict(), **INSTALL_PROVENANCE},
+    notebook_filename=NOTEBOOK_FILENAME,
+    notebook_sha256=EXPECTED_NOTEBOOK_SHA256,
+    configuration={
+        "run_mode": RUN_MODE,
+        "payload_mib": list(PAYLOADS),
+        "repetitions": REPETITIONS,
+        "sampling_interval_s": SAMPLING_INTERVAL_S,
+    },
+    development_smoke_only=DEVELOPMENT_SMOKE_ONLY,
+)
+print({"machine_readable_package": str(CALIBRATION_PACKAGE)})
+""",
+        ),
+        markdown(
+            "cal-results",
+            "## Results\n\n"
+            "not executed. The committed notebook contains no runtime result or output.\n",
+        ),
+        code(
+            "cal-export",
+            """from commguard.artifacts import ArtifactStore, sha256_file
+
+ARCHIVE = Path(f"/kaggle/working/commguard-calibration-v4-prototype-{NOTEBOOK_RUN_ID}.tar.gz")
+ARCHIVE, SHA_FILE = ArtifactStore(ARTIFACTS).export_with_checksum(ARCHIVE)
+ARCHIVE_SHA256 = sha256_file(ARCHIVE)
+print({
+    "archive": str(ARCHIVE),
+    "archive_sha256": ARCHIVE_SHA256,
+    "sha256_file": str(SHA_FILE),
+    "calibration_status": CALIBRATION["status"],
+    "calibration_artifact_reference": CALIBRATION["reference"],
+})
+SCIENTIFIC_ACCEPTANCE_ELIGIBLE = not DEVELOPMENT_SMOKE_ONLY
+SOURCE_CLEAN = not SOURCE_DIRTY
+RESULT_SUPPORTED = CALIBRATION["result_state"] == "supported"
+MODERN_CAPTURE_GATE_PASSED = bool(
+    CALIBRATION["modern_capture_gate_passed"]
+)
+CALIBRATION_ACCEPTED = bool(
+    SCIENTIFIC_ACCEPTANCE_ELIGIBLE
+    and RESULT_SUPPORTED
+    and MODERN_CAPTURE_GATE_PASSED
+    and SOURCE_CLEAN
+)
+
+print({
+    "scientific_acceptance_eligible": SCIENTIFIC_ACCEPTANCE_ELIGIBLE,
+    "accepted": CALIBRATION_ACCEPTED,
+    "result_state": CALIBRATION["result_state"],
+    "modern_capture_gate_passed": MODERN_CAPTURE_GATE_PASSED,
+    "source_dirty": SOURCE_DIRTY,
+})
+
+if DEVELOPMENT_SMOKE_ONLY:
+    print(
+        "DEVELOPMENT SMOKE ONLY: run full mode in a new workspace "
+        "before benign collection."
+    )
+elif not CALIBRATION_ACCEPTED:
+    print(
+        "FAILED/INCONCLUSIVE EVIDENCE WAS PRESERVED. "
+        "Do not run the benign notebook."
+    )
+    raise RuntimeError(
+        "The confirmatory calibration did not pass every downstream gate. "
+        "Download the archive and SHA-256 file, inspect the acceptance "
+        "artifacts, and do not advance to benign collection."
+    )
+print(f"NEXT STEP: add {ARCHIVE} to a private Kaggle dataset without renaming it.")
+print(
+    "NEXT STEP: copy the exact archive SHA-256 and calibration artifact reference into "
+    "commguard_benign_corpus_v2.ipynb."
+)
+""",
+        ),
+    ]
+
+
 def benign_notebook() -> list[dict[str, object]]:
     return [
         markdown(
@@ -536,7 +777,7 @@ def benign_notebook() -> list[dict[str, object]]:
 from commguard.calibration import build_calibration_reference, verify_calibration_reference
 
 PRIOR_CALIBRATION_ARTIFACT_PATH = Path("results/calibration-REPLACE.json")
-EXPECTED_PRIOR_CALIBRATION_SHA256 = ""  # Copy from calibration_v3 output.
+EXPECTED_PRIOR_CALIBRATION_SHA256 = ""  # Copy from an accepted calibration_v4 output.
 if not re.fullmatch(r"[0-9a-f]{64}", EXPECTED_PRIOR_CALIBRATION_SHA256):
     raise RuntimeError("Set the exact prior calibration artifact SHA-256.")
 if PRIOR_CALIBRATION_ARTIFACT_PATH.is_absolute() or ".." in PRIOR_CALIBRATION_ARTIFACT_PATH.parts:
@@ -977,16 +1218,18 @@ print({"machine_readable_package": str(ADVERSARIAL_PACKAGE)})
 
 
 NOTEBOOKS = {
-    "commguard_calibration_v3.ipynb": calibration_notebook,
+    "commguard_calibration_v4.ipynb": calibration_v4_notebook,
     "commguard_benign_corpus_v2.ipynb": benign_notebook,
     "commguard_detector_evaluation_v2.ipynb": detector_notebook,
     "commguard_adversarial_redteam_v1.ipynb": adversarial_notebook,
 }
 
+HISTORICAL_NOTEBOOKS = {
+    "commguard_calibration_v3.ipynb": calibration_v3_notebook,
+}
+
 NOTEBOOK_ROLES = {
-    "commguard_calibration_v3.ipynb": (
-        "calibrate dual-T4 telemetry support and accepted payload sensitivity"
-    ),
+    "commguard_calibration_v4.ipynb": ("run the 0.2-second dual-T4 confirmatory calibration gate"),
     "commguard_benign_corpus_v2.ipynb": (
         "collect a duration-valid, resumable benign workload corpus"
     ),
@@ -1007,6 +1250,15 @@ def canonical_inventory() -> dict[str, object]:
         "canonical_notebooks": [
             {"order": order, "filename": name, "role": NOTEBOOK_ROLES[name]}
             for order, name in enumerate(NOTEBOOKS, start=1)
+        ],
+        "historical_notebooks": [
+            {
+                "filename": "commguard_calibration_v3.ipynb",
+                "role": (
+                    "historical 0.5-second calibration retained for provenance; "
+                    "not the active downstream gate"
+                ),
+            }
         ],
         "diagnostic_notebooks": [
             {
@@ -1059,14 +1311,23 @@ def main() -> int:
             mismatches.append(inventory_path.name)
     else:
         inventory_path.write_text(expected_inventory, encoding="utf-8")
-    for name, builder in NOTEBOOKS.items():
+    generated_notebooks = {
+        **HISTORICAL_NOTEBOOKS,
+        **NOTEBOOKS,
+    }
+    for name, builder in generated_notebooks.items():
         expected = encoded_notebook(builder())
         path = NOTEBOOK_ROOT / name
         if args.check:
             if not path.is_file() or path.read_text(encoding="utf-8") != expected:
                 mismatches.append(name)
         else:
-            path.write_text(expected, encoding="utf-8")
+            with path.open(
+                "w",
+                encoding="utf-8",
+                newline="\n",  # Fixed: changed from "\\n" to "\n"
+            ) as stream:
+                stream.write(expected)
     if mismatches:
         parser.error("generated notebooks differ: " + ", ".join(mismatches))
     return 0

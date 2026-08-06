@@ -88,3 +88,26 @@ session identities. Coverage is printed and serialized before evaluation. If
 any family is missing, detector fitting stops. Only a passing benign evaluation
 may unlock the separately approved adversarial plan; the declared final
 family/session/configuration holdout remains sealed.
+
+## Calibration-v3 full result and calibration-v4 next step
+
+The completed calibration-v3 full execution is valid negative/partial
+scientific evidence rather than a software execution failure.
+
+Recorded outcome:
+
+- execution completed;
+- scientific acceptance eligible: true;
+- accepted: false;
+- result state: `partially_supported`;
+- modern capture gate passed: false;
+- source dirty: false;
+- reliable payload range: 4–128 MiB;
+- unreliable payload group: 1 MiB.
+
+The 1 MiB payload passed the capture threshold in two of five repetitions.
+Consequently, the benign corpus remains blocked.
+
+The next experiment is the canonical calibration-v4 confirmatory run using a
+0.2-second interval, five idle repetitions, and five repetitions at each of
+1, 4, 16, 64, and 128 MiB.

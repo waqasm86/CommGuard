@@ -1,10 +1,11 @@
 # Notebook source and evidence policy
 
-Policy version `commguard-notebook-policy-v3` requires exactly four canonical
-notebooks in registered order plus the separated v4 diagnostic. Canonical code
-cells are output-free, parameter-tagged, use installed SDK APIs, provide smoke
-and full gates where hardware is collected, record final `run_status.json`, and
-export non-destructive deterministic archives with sibling SHA-256 files.
+Policy version `commguard-notebook-policy-v4` requires four active canonical
+notebooks in registered order, one retained historical calibration notebook,
+and the separated diagnostic sampling-study notebook. Canonical code cells are
+output-free, parameter-tagged, use installed SDK APIs, provide smoke and full
+gates where hardware is collected, record final `run_status.json`, and export
+non-destructive deterministic archives with sibling SHA-256 files.
 
 CommGuard separates canonical notebook source from executed evidence.
 
@@ -24,7 +25,7 @@ exists.
 The current canonical sequence is generated deterministically by
 `tools/generate_canonical_notebooks.py` and checked with `--check`:
 
-1. `commguard_calibration_v3.ipynb`
+1. `commguard_calibration_v4.ipynb`
 2. `commguard_benign_corpus_v2.ipynb`
 3. `commguard_detector_evaluation_v2.ipynb`
 4. `commguard_adversarial_redteam_v1.ipynb`
@@ -88,3 +89,28 @@ and preserved historical executed evidence. They remain recoverable from Git
 history but are not result evidence or inputs to the current sequence.
 
 Superseding a canonical source never deletes executed evidence.
+
+## Active confirmatory calibration — policy v4
+
+The active canonical calibration notebook is
+`commguard_calibration_v4.ipynb`.
+
+It uses a prospectively selected telemetry sampling interval of 0.2 seconds.
+The full configuration contains five idle repetitions and five repetitions at
+each of 1, 4, 16, 64, and 128 MiB, for 30 total observations.
+
+The previous `commguard_calibration_v3.ipynb` remains in the repository as
+historical canonical source for provenance. It is not the active downstream
+gate.
+
+The benign corpus remains blocked unless the confirmatory calibration records
+all of the following:
+
+- `scientific_acceptance_eligible: true`
+- `accepted: true`
+- `result_state: supported`
+- `modern_capture_gate_passed: true`
+- `source_dirty: false`
+
+Smoke runs are development checks and cannot satisfy this gate. Diagnostic
+sampling-study notebooks cannot satisfy this gate.

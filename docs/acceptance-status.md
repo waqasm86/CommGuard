@@ -80,3 +80,20 @@ debugging; a clean patched calibration rerun is required.
 
 No item in the “Requires Kaggle dual-T4 evidence” section is claimed complete
 by local tests or historical evidence.
+
+## Current downstream status
+
+Calibration-v3 is not accepted for downstream use. Its clean execution and
+partial support do not authorize benign-corpus collection.
+
+The active gate is calibration-v4. Downstream execution is permitted only
+when the saved full-run evidence records:
+
+- `scientific_acceptance_eligible: true`
+- `accepted: true`
+- `result_state: supported`
+- `modern_capture_gate_passed: true`
+- `source_dirty: false`
+
+Any smoke, unsupported, partially supported, inconclusive, dirty-source, or
+failed-capture result remains blocked.

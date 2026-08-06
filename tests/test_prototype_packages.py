@@ -43,7 +43,7 @@ def test_calibration_package_has_required_files_and_scope(tmp_path: Path, monkey
             "source_dirty": False,
             "experiment_session_id": "session-1",
         },
-        notebook_filename="commguard_calibration_v3.ipynb",
+        notebook_filename="commguard_calibration_v4.ipynb",
         notebook_sha256="b" * 64,
         configuration={"sampling_interval_s": 0.5},
         development_smoke_only=False,

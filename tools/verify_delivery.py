@@ -65,13 +65,20 @@ def check_notebooks(failures: list[str], *, root: Path = ROOT) -> None:
     entries = inventory["canonical_notebooks"]
     names = [entry["filename"] if isinstance(entry, dict) else entry for entry in entries]
     if names != [
-        "commguard_calibration_v3.ipynb",
+        "commguard_calibration_v4.ipynb",
         "commguard_benign_corpus_v2.ipynb",
         "commguard_detector_evaluation_v2.ipynb",
         "commguard_adversarial_redteam_v1.ipynb",
     ]:
         failures.append("canonical notebook inventory order is invalid")
-    for name in names:
+    historical_entries = inventory.get("historical_notebooks", [])
+    historical_names = [
+        entry["filename"] if isinstance(entry, dict) else entry for entry in historical_entries
+    ]
+    if historical_names != ["commguard_calibration_v3.ipynb"]:
+        failures.append("historical notebook inventory is invalid")
+
+    for name in [*names, *historical_names]:
         path = inventory_path.parent / name
         notebook = json.loads(path.read_text(encoding="utf-8"))
         for cell in notebook["cells"]:
