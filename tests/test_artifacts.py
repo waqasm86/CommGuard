@@ -66,12 +66,25 @@ def test_export_member_selection_is_sorted_and_excludes_symlinks(tmp_path) -> No
     store.initialize()
     store.write_text("results/z-last.txt", "z\n")
     store.write_text("results/a-first.txt", "a\n")
-    (store.root / "results/link.txt").symlink_to(store.root / "results/a-first.txt")
+
+    link_path = store.root / "results/link.txt"
+    target_path = store.root / "results/a-first.txt"
+
+    try:
+        link_path.symlink_to(target_path)
+    except OSError as exc:
+        if getattr(exc, "winerror", None) == 1314:
+            pytest.skip(
+                "Windows symbolic-link creation requires Developer Mode "
+                "or elevated symbolic-link privileges"
+            )
+        raise
 
     output = store.export(tmp_path / "bundle.tar.gz")
 
     with tarfile.open(output, "r:gz") as archive:
         names = archive.getnames()
+
     assert names == sorted(names)
     assert "results/a-first.txt" in names
     assert "results/z-last.txt" in names

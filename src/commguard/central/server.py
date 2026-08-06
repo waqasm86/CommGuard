@@ -157,9 +157,13 @@ class CentralIngestionService:
                 "message experiment session does not match the central service",
                 agent_id,
             )
+        
+        # Parse the message based on type
+        message: TelemetryBatch | Heartbeat | None = None
         try:
             if payload.get("message_type") == "telemetry_batch":
-                message: TelemetryBatch | Heartbeat = TelemetryBatch.from_dict(payload)
+                message = TelemetryBatch.from_dict(payload)
+                # Validate telemetry samples if we have a TelemetryBatch
                 validate_telemetry_samples(message.samples)
             elif payload.get("message_type") == "heartbeat":
                 message = Heartbeat.from_dict(payload)
@@ -173,6 +177,16 @@ class CentralIngestionService:
                 )
         except (TypeError, ValueError) as exc:
             return self._ack(message_id, False, self._reason(exc), str(exc), agent_id)
+
+        # Ensure we have a valid message
+        if message is None:
+            return self._ack(
+                message_id,
+                False,
+                "invalid_message",
+                "failed to parse message",
+                agent_id,
+            )
 
         authenticated_digest = hashlib.sha256(
             canonical_bytes(payload, include_signature=True)
@@ -221,6 +235,8 @@ class CentralIngestionService:
                 f"clock skew {skew:.6f}s exceeds {self.maximum_clock_skew_seconds:.6f}s",
                 agent_id,
             )
+        
+        # Handle clock skew validation specifically for TelemetryBatch
         if isinstance(message, TelemetryBatch):
             sample_skews = [
                 abs(
@@ -241,6 +257,8 @@ class CentralIngestionService:
                     f"sample clock skew {max(sample_skews):.6f}s exceeds limit",
                     agent_id,
                 )
+            
+            # Handle batch chain validation only for TelemetryBatch
             expected_previous = self.last_batch_by_agent.get(agent_id)
             if expected_previous is not None and message.previous_batch_id != expected_previous:
                 return self._ack(
@@ -251,6 +269,8 @@ class CentralIngestionService:
                     f"expected={expected_previous!r}",
                     agent_id,
                 )
+            
+            # Store batch information for TelemetryBatch
             self.last_batch_by_agent[agent_id] = message.batch_id
             self.accepted_samples_by_node[message.node_id].extend(
                 (message.batch_id, dict(sample)) for sample in message.samples
@@ -258,11 +278,14 @@ class CentralIngestionService:
             self.accepted_samples_by_agent[message.agent_id].extend(
                 (message.batch_id, dict(sample)) for sample in message.samples
             )
+        
+        # Update common state for all message types
         self.last_sequence_by_agent[agent_id] = message.sequence
         self.last_seen_by_node[message.node_id] = now
         self.last_seen_by_agent[agent_id] = now
         self.seen_message_ids.add(message_id)
         self.accepted_message_digests[message_id] = authenticated_digest
+        
         return self._ack(message_id, True, "accepted", "message accepted", agent_id)
 
     def node_health(self) -> dict[str, dict[str, Any]]:

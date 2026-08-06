@@ -415,12 +415,16 @@ def group_cross_validation_folds(
     group_ids = sorted(runs_by_group)
     if len(group_ids) < 2:
         raise ValueError("grouped cross-validation requires at least two complete groups")
+    
+    # Fix: Use proper tuple annotation with variable length
+    test_groups_by_fold: list[tuple[str, ...]] = []
     if mode == "leave_one_group_out":
         test_groups_by_fold = [(group_id,) for group_id in group_ids]
     else:
         if not 2 <= n_splits <= len(group_ids):
             raise ValueError("n_splits must be between two and the complete-group count")
         test_groups_by_fold = [tuple(group_ids[index::n_splits]) for index in range(n_splits)]
+    
     folds: list[CrossValidationFold] = []
     for index, test_group_ids in enumerate(test_groups_by_fold):
         test_group_set = set(test_group_ids)

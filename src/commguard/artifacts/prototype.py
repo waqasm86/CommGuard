@@ -6,16 +6,39 @@ import csv
 import hashlib
 import json
 import math
+import socket
 import statistics
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from commguard.artifacts.storage import ArtifactStore, sha256_file
 from commguard.scope import PROTOTYPE_SCOPE_DECLARATION, with_prototype_scope
 
 REPOSITORY_URL = "https://github.com/waqasm86/CommGuard"
+
+
+def _load_json(root: Path, relative: str | Path) -> dict[str, Any]:
+    path = (root / relative).resolve()
+    # Ensure path is relative to root for security
+    _ = path.relative_to(root.resolve())
+    with open(path, 'r', encoding='utf-8') as f:
+        result: dict[str, Any] = json.load(f)
+        return result
+
+
+def _load_optional_json(root: Path, relative: str | Path) -> dict[str, Any] | None:
+    path = (root / relative).resolve()
+    try:
+        _ = path.relative_to(root.resolve())
+    except ValueError:
+        return None
+    if not path.exists():
+        return None
+    with open(path, 'r', encoding='utf-8') as f:
+        result: dict[str, Any] = json.load(f)
+        return result
 
 
 def configuration_hash(configuration: Mapping[str, Any]) -> str:
@@ -224,10 +247,13 @@ def materialize_calibration_package(
     return store.resolve(prefix)
 
 
-def _load_json(root: Path, relative: str | Path) -> dict[str, Any]:
+def _load_run_json(root: Path, relative: str | Path) -> dict[str, Any]:
+    """Helper to load JSON from a run directory."""
     path = (root / relative).resolve()
     path.relative_to(root.resolve())
-    return json.loads(path.read_text(encoding="utf-8"))
+    with open(path, 'r', encoding='utf-8') as f:
+        result: dict[str, Any] = json.load(f)
+        return result
 
 
 def _aggregate_features(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -287,8 +313,8 @@ def materialize_corpus_package(
         notebook_sha256=notebook_sha256,
         configuration=configuration,
     )
-    planned = _load_json(root, str(matrix["planned_corpus_manifest"]))
-    final = _load_json(root, str(matrix["final_corpus_manifest"]))
+    planned = _load_run_json(root, str(matrix["planned_corpus_manifest"]))
+    final = _load_run_json(root, str(matrix["final_corpus_manifest"]))
     planned_rows = [dict(row) for row in planned["planned_runs"]]
     completion_rows = [
         {
@@ -305,7 +331,7 @@ def materialize_corpus_package(
     _csv(store, prefix / "planned_run_matrix.csv", planned_rows)
     store.write_json(prefix / "planned_run_matrix.json", {"runs": planned_rows}, validate=False)
     run_manifests = [
-        _load_json(root, Path("runs") / run_id / "manifest.json")
+        _load_run_json(root, Path("runs") / run_id / "manifest.json")
         for run_id in matrix.get("run_ids", [])
     ]
     _jsonl(store, prefix / "corpus_runs.jsonl", run_manifests)
@@ -321,7 +347,7 @@ def materialize_corpus_package(
     store.write_json(prefix / "corpus_acceptance.json", acceptance, validate=False)
     _csv(store, prefix / "completion_matrix.csv", completion_rows)
     store.write_json(prefix / "completion_matrix.json", {"runs": completion_rows}, validate=False)
-    extraction = _load_json(root, str(matrix["feature_extraction_summary"]))
+    extraction = _load_run_json(root, str(matrix["feature_extraction_summary"]))
     feature_rows = [
         json.loads(line)
         for line in (root / extraction["feature_artifact"]).read_text(encoding="utf-8").splitlines()
@@ -532,7 +558,7 @@ def materialize_adversarial_package(
         validate=False,
     )
     manifests = [
-        _load_json(root, Path("runs") / run_id / "manifest.json")
+        _load_run_json(root, Path("runs") / run_id / "manifest.json")
         for run_id in matrix.get("run_ids", [])
     ]
     _jsonl(store, prefix / "adversarial_runs.jsonl", manifests)
@@ -540,7 +566,7 @@ def materialize_adversarial_package(
         "periodic_local_sgd", {}
     )
     by_configuration = family.get("by_configuration", {})
-    extraction = _load_json(root, str(matrix["feature_extraction_summary"]))
+    extraction = _load_run_json(root, str(matrix["feature_extraction_summary"]))
     feature_rows = [
         json.loads(line)
         for line in (root / extraction["feature_artifact"]).read_text(encoding="utf-8").splitlines()

@@ -155,6 +155,14 @@ class CorpusManifest:
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> CorpusManifest:
+        # Fix: Explicitly validate source_dirty to handle Any | None correctly
+        source_dirty_value = data.get("source_dirty")
+        source_dirty = (
+            source_dirty_value
+            if isinstance(source_dirty_value, bool)
+            else False
+        )
+        
         return cls(
             corpus_id=str(data.get("corpus_id", "")),
             collection_id=str(data.get("collection_id", "")),
@@ -163,7 +171,7 @@ class CorpusManifest:
             planned_runs=tuple(PlannedRun(**item) for item in data.get("planned_runs", ())),
             accepted_run_ids=tuple(str(value) for value in data.get("accepted_run_ids", ())),
             source_commit=str(data.get("source_commit", "")),
-            source_dirty=data.get("source_dirty"),
+            source_dirty=source_dirty,
             notebook_version=data.get("notebook_version"),
             input_archive_sha256=data.get("input_archive_sha256"),
             random_seed=int(data.get("random_seed", -1)),

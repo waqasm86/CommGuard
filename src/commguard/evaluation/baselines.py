@@ -877,16 +877,33 @@ def evaluate_detector(
     )
     import pandas as pd
 
-    rows = list(extraction.features)
+    # Fix: Properly build the rows list with correct type
+    rows: list[dict[str, Any]] = []
+    for row in extraction.features:
+        if isinstance(row, dict):
+            rows.append(row)
+        else:
+            rows.append(dict(row))
+
     if adversarial_extraction_summary is not None:
         adversarial_extraction = load_extraction_result(root, adversarial_extraction_summary)
         if set(adversarial_extraction.selected_designations) != {"adversarial"}:
             raise ValueError("adversarial extraction must select only the adversarial designation")
-        rows.extend(adversarial_extraction.features)
-    benign_primary_rows, adversarial_primary_rows = _partition_primary_evaluation_rows(rows)
+        for row in adversarial_extraction.features:
+            if isinstance(row, dict):
+                rows.append(row)
+            else:
+                rows.append(dict(row))
+
+    benign_primary_rows, adversarial_primary_rows = _partition_primary_evaluation_rows(
+        [dict(row) for row in rows]  # Ensure each row is a dict
+    )
     feature_paths = sorted((root / "features").glob("features-*.jsonl"))
+
+    # Create DataFrames with proper type hints
     frame = pd.DataFrame(rows)
     frame["_target"] = (frame["target_label"] == "training").astype(int)
+
     primary_frame = pd.DataFrame(
         [row for row in benign_primary_rows if row.get("target_label") in {"training", "inference"}]
     )
@@ -895,13 +912,18 @@ def evaluate_detector(
     )
     secondary_frame = pd.DataFrame(benign_primary_rows)
     adversarial_frame = pd.DataFrame(adversarial_primary_rows)
+
     if not primary_frame.empty:
         primary_frame["_target"] = (primary_frame["target_label"] == "training").astype(int)
     if not adversarial_frame.empty:
         adversarial_frame["_target"] = (adversarial_frame["target_label"] == "training").astype(int)
     if primary_frame.empty:
         raise ValueError("primary 30-second feature frame is empty after coverage passed")
-    primary_rows = primary_frame.to_dict("records")
+
+    primary_rows: list[dict[str, Any]] = [
+        {str(key): value for key, value in record.items()}
+        for record in primary_frame.to_dict("records")
+    ]
     columns = numeric_feature_columns(primary_rows)
     primary_families = tuple(sorted({str(row["workload_family"]) for row in primary_rows}))
     split_plan = make_split_plan(primary_rows, required_families=primary_families)
