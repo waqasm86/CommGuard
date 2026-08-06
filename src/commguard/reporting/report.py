@@ -20,12 +20,12 @@ NON_AFFILIATION = (
 
 def load_json_object(path: Path) -> dict[str, Any]:
     """Load and validate a JSON object from a file path."""
-    with open(path, 'r', encoding='utf-8') as f:
+    with open(path, encoding="utf-8") as f:
         value: Any = json.load(f)
-    
+
     if not isinstance(value, dict):
         raise ValueError(f"Expected a JSON object in {path}")
-    
+
     return value
 
 
@@ -33,13 +33,13 @@ def load_optional_json_object(path: Path) -> dict[str, Any] | None:
     """Load and validate a JSON object from a file path, returning None if not found."""
     if not path.exists():
         return None
-    
-    with open(path, 'r', encoding='utf-8') as f:
+
+    with open(path, encoding="utf-8") as f:
         value: Any = json.load(f)
-    
+
     if not isinstance(value, dict):
         raise ValueError(f"Expected a JSON object in {path}")
-    
+
     return value
 
 

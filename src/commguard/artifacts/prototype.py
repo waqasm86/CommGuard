@@ -6,12 +6,11 @@ import csv
 import hashlib
 import json
 import math
-import socket
 import statistics
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from commguard.artifacts.storage import ArtifactStore, sha256_file
 from commguard.scope import PROTOTYPE_SCOPE_DECLARATION, with_prototype_scope
@@ -23,7 +22,7 @@ def _load_json(root: Path, relative: str | Path) -> dict[str, Any]:
     path = (root / relative).resolve()
     # Ensure path is relative to root for security
     _ = path.relative_to(root.resolve())
-    with open(path, 'r', encoding='utf-8') as f:
+    with open(path, encoding="utf-8") as f:
         result: dict[str, Any] = json.load(f)
         return result
 
@@ -36,7 +35,7 @@ def _load_optional_json(root: Path, relative: str | Path) -> dict[str, Any] | No
         return None
     if not path.exists():
         return None
-    with open(path, 'r', encoding='utf-8') as f:
+    with open(path, encoding="utf-8") as f:
         result: dict[str, Any] = json.load(f)
         return result
 
@@ -251,7 +250,7 @@ def _load_run_json(root: Path, relative: str | Path) -> dict[str, Any]:
     """Helper to load JSON from a run directory."""
     path = (root / relative).resolve()
     path.relative_to(root.resolve())
-    with open(path, 'r', encoding='utf-8') as f:
+    with open(path, encoding="utf-8") as f:
         result: dict[str, Any] = json.load(f)
         return result
 
