@@ -157,11 +157,7 @@ class CorpusManifest:
     def from_dict(cls, data: Mapping[str, Any]) -> CorpusManifest:
         # Fix: Explicitly validate source_dirty to handle Any | None correctly
         source_dirty_value = data.get("source_dirty")
-        source_dirty = (
-            source_dirty_value
-            if isinstance(source_dirty_value, bool)
-            else False
-        )
+        source_dirty = source_dirty_value if isinstance(source_dirty_value, bool) else False
 
         return cls(
             corpus_id=str(data.get("corpus_id", "")),
