@@ -21,18 +21,46 @@ def _free_port() -> int:
         return int(sock.getsockname()[1])
 
 
+def _terminate_process_group(process: subprocess.Popen[str]) -> None:
+    """Terminate a worker process safely on POSIX and Windows."""
+    if process.poll() is not None:
+        return
+
+    killpg = getattr(os, "killpg", None)
+
+    if callable(killpg) and os.name == "posix":
+        killpg(process.pid, signal.SIGTERM)
+    else:
+        process.terminate()
+
+
+def _force_kill_process_group(process: subprocess.Popen[str]) -> None:
+    """Force-kill a worker process safely on POSIX and Windows."""
+    if process.poll() is not None:
+        return
+
+    killpg = getattr(os, "killpg", None)
+    sigkill = getattr(signal, "SIGKILL", signal.SIGTERM)
+
+    if callable(killpg) and os.name == "posix":
+        killpg(process.pid, sigkill)
+    else:
+        process.kill()
+
+
 def _terminate_tree(process: subprocess.Popen[str], grace_s: float = 5.0) -> bool:
     cleaned = False
     if process.poll() is not None:
         return True
+    
     try:
-        os.killpg(process.pid, signal.SIGTERM)
+        _terminate_process_group(process)
         process.wait(timeout=grace_s)
         cleaned = True
     except (ProcessLookupError, subprocess.TimeoutExpired):
         if process.poll() is None:
             with suppress(ProcessLookupError):
-                os.killpg(process.pid, signal.SIGKILL)
+                _force_kill_process_group(process)
             process.wait(timeout=grace_s)
             cleaned = True
     return cleaned

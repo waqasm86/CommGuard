@@ -8,6 +8,7 @@ import os
 import random
 import socket
 import subprocess
+import sys
 import time
 import traceback
 from collections.abc import Callable
@@ -53,9 +54,14 @@ def _emit_measurement_interval(writer: EventWriter, controller: DurationControll
 
 
 def _gpu_uuid(local_rank: int) -> str:
+    # Use nvidia-smi which works on both Windows and Linux
+    nvidia_smi_cmd = "nvidia-smi"
+    if sys.platform == "win32":
+        nvidia_smi_cmd = "nvidia-smi.exe"
+    
     result = subprocess.run(
         [
-            "nvidia-smi",
+            nvidia_smi_cmd,
             f"--id={local_rank}",
             "--query-gpu=uuid",
             "--format=csv,noheader",
@@ -97,7 +103,7 @@ def _assert_equal_across_ranks(torch: Any, dist: Any, value: Any, label: str) ->
 def _tiny_model(torch: Any, config: dict[str, Any]) -> Any:
     nn = torch.nn
 
-    class TinyLanguageModel(nn.Module):
+    class TinyLanguageModel(nn.Module):  # type: ignore[name-defined,misc]
         def __init__(self) -> None:
             super().__init__()
             vocab = int(config.get("vocab_size", 2048))
@@ -904,10 +910,12 @@ def main() -> int:
     world_size = int(os.environ["WORLD_SIZE"])
     run_id = str(config["run_id"])
     writer = EventWriter(args.output / f"rank-{rank}.events.jsonl", run_id, rank, local_rank)
-    dist = None
+    dist: Any = None
     try:
         import torch
-        import torch.distributed as dist
+        import torch.distributed as torch_dist
+
+        dist = torch_dist
 
         if world_size != 2:
             raise RuntimeError(f"CommGuard requires WORLD_SIZE=2, got {world_size}")

@@ -18,6 +18,31 @@ NON_AFFILIATION = (
 )
 
 
+def load_json_object(path: Path) -> dict[str, Any]:
+    """Load and validate a JSON object from a file path."""
+    with open(path, 'r', encoding='utf-8') as f:
+        value: Any = json.load(f)
+    
+    if not isinstance(value, dict):
+        raise ValueError(f"Expected a JSON object in {path}")
+    
+    return value
+
+
+def load_optional_json_object(path: Path) -> dict[str, Any] | None:
+    """Load and validate a JSON object from a file path, returning None if not found."""
+    if not path.exists():
+        return None
+    
+    with open(path, 'r', encoding='utf-8') as f:
+        value: Any = json.load(f)
+    
+    if not isinstance(value, dict):
+        raise ValueError(f"Expected a JSON object in {path}")
+    
+    return value
+
+
 def _adversarial_result_text(family: str, result: dict[str, Any]) -> str:
     status = str(result.get("status", "unavailable"))
     if status == "evaluated_frozen_benign_only_baseline":
@@ -33,7 +58,8 @@ def _latest_json(directory: Path, pattern: str) -> dict[str, Any] | None:
     paths = sorted(directory.glob(pattern))
     if not paths:
         return None
-    return json.loads(paths[-1].read_text(encoding="utf-8"))
+    result: dict[str, Any] = json.loads(paths[-1].read_text(encoding="utf-8"))
+    return result
 
 
 def _latest_path(directory: Path, pattern: str) -> Path | None:
@@ -375,7 +401,8 @@ def generate_report(
     ]
     if evidence_paths:
         for path in evidence_paths:
-            lines.append(f"- `{path.relative_to(root)}`: `{sha256_file(path)}`")
+            relative_path = path.relative_to(root).as_posix()
+            lines.append(f"- `{relative_path}`: `{sha256_file(path)}`")
     else:
         lines.append("No input artifacts were found to hash.")
     lines.append("")

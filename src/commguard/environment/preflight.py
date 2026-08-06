@@ -14,7 +14,7 @@ import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from commguard.artifacts import ArtifactStore
 from commguard.exceptions import ReadinessError
@@ -86,7 +86,7 @@ def _torch_details() -> dict[str, Any]:
         return {"available": False, "error": f"{type(exc).__name__}: {exc}"}
     nccl_version: str | None = None
     try:
-        raw = torch.cuda.nccl.version()
+        raw = cast(Any, torch.cuda.nccl).version()
         nccl_version = ".".join(map(str, raw)) if isinstance(raw, tuple) else str(raw)
     except Exception:
         pass
@@ -107,7 +107,7 @@ def _torch_details() -> dict[str, Any]:
         "distributed_available": bool(torch.distributed.is_available()),
         "nccl_available": bool(torch.distributed.is_nccl_available()),
         "nccl_version": nccl_version,
-        "cudnn_version": torch.backends.cudnn.version(),
+        "cudnn_version": cast(Any, torch.backends.cudnn).version(),
         "peer_access": peer_access,
     }
 
@@ -234,10 +234,13 @@ def check_environment(
         message = f"cannot inspect preflight output directory {output_path}: {exc}"
         raise ReadinessError(message) from exc
     try:
-        page_size = os.sysconf("SC_PAGE_SIZE")
-        pages = os.sysconf("SC_PHYS_PAGES")
-        ram_total = int(page_size * pages)
-    except (ValueError, OSError, AttributeError):
+        sysconf = getattr(os, "sysconf", None)
+        if not callable(sysconf):
+            raise AttributeError("os.sysconf is unavailable on this platform")
+        page_size = int(sysconf("SC_PAGE_SIZE"))
+        pages = int(sysconf("SC_PHYS_PAGES"))
+        ram_total = page_size * pages
+    except (TypeError, ValueError, OSError, AttributeError):
         ram_total = None
 
     readiness = {

@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from commguard.exceptions import ValidationError
 
@@ -369,7 +369,9 @@ class RunManifest:
                             f"config.rank_runtime_evidence.{rank}.strategy_summary",
                             "expected and actual sync counts differ",
                         )
-                        sync_counts.append(actual)
+                        # Fix: Use cast to tell mypy that actual is an int
+                        actual_int = cast(int, actual)
+                        sync_counts.append(actual_int)
                         _require(
                             isinstance(summary.get("communication_bytes_proxy"), int)
                             and summary["communication_bytes_proxy"] >= 0,
@@ -516,6 +518,7 @@ def validate_artifact(data: Mapping[str, Any]) -> None:
                 "source_dirty",
                 "must be a boolean",
             )
+            
     elif kind == "feature_row":
         _require_fields(
             data,
@@ -558,7 +561,19 @@ def validate_artifact(data: Mapping[str, Any]) -> None:
                 "workload_config_id",
             ):
                 _require(bool(data[name]), name, "must be non-empty")
-            _require(int(data["aligned_sample_pairs"]) >= 2, "aligned_sample_pairs", "too few")
+            
+            # Fixed: Handle the aligned_sample_pairs validation properly
+            aligned_pairs = data.get("aligned_sample_pairs")
+            _require(aligned_pairs is not None, "aligned_sample_pairs", "must be non-empty")
+            
+            # Convert to int safely
+            try:
+                pairs = int(cast(int, aligned_pairs))
+            except (TypeError, ValueError):
+                _require(False, "aligned_sample_pairs", "must be convertible to int")
+            else:
+                _require(pairs >= 2, "aligned_sample_pairs", "too few (must be >= 2)")
+            
     elif kind == "split_assignment":
         _require_fields(data, "split_assignment", ("run_id", "split"))
         _require(

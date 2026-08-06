@@ -22,3 +22,6 @@ Project-Monitoring-GPU-Communication.txt
 commguard-*.tar.gz
 commguard-*.tar.gz.sha256
 commguard-review-bundle-*
+
+# Local repair backups
+.repair-backup-*/

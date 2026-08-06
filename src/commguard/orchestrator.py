@@ -9,11 +9,11 @@ import random
 import statistics
 import time
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from commguard.adversarial import AdversarialHoldoutPlan, strategy_for_config
 from commguard.artifacts import ArtifactStore
@@ -50,6 +50,29 @@ from commguard.workloads import (
     get_workload,
     profile_workloads,
 )
+
+
+def load_json_object(path: Path) -> dict[str, Any]:
+    """Load and validate a JSON object from a file path."""
+    value: Any = json.loads(path.read_text(encoding="utf-8"))
+
+    if not isinstance(value, dict):
+        raise ValueError(f"Expected a JSON object in {path}")
+
+    return value
+
+
+def load_optional_json_object(path: Path) -> dict[str, Any] | None:
+    """Load and validate a JSON object from a file path, returning None if not found."""
+    if not path.exists():
+        return None
+
+    value: Any = json.loads(path.read_text(encoding="utf-8"))
+
+    if not isinstance(value, dict):
+        raise ValueError(f"Expected a JSON object in {path}")
+
+    return value
 
 
 def _nccl_environment() -> dict[str, str]:
@@ -136,7 +159,7 @@ def _write_run_evidence(
     result: LaunchResult,
     collector: TelemetryCollector,
     diagnostics: dict[str, Any],
-    preflight: dict[str, Any],
+    preflight_data: dict[str, Any],
     provenance: ProvenanceContext,
     started: str,
     ended: str,
@@ -237,15 +260,15 @@ def _write_run_evidence(
         world_size=2,
         config=manifested_config,
         environment={
-            "gpus": preflight["gpus"],
-            "platform": preflight["platform"],
-            "torch": preflight["torch"],
-            "nvcc": preflight["nvcc"],
-            "topology": preflight["topology"],
-            "packages": preflight["packages"],
-            "telemetry_capabilities": preflight["telemetry_capabilities"],
+            "gpus": preflight_data["gpus"],
+            "platform": preflight_data["platform"],
+            "torch": preflight_data["torch"],
+            "nvcc": preflight_data["nvcc"],
+            "topology": preflight_data["topology"],
+            "packages": preflight_data["packages"],
+            "telemetry_capabilities": preflight_data["telemetry_capabilities"],
         },
-        environment_fingerprint=str(preflight["environment_fingerprint"]),
+        environment_fingerprint=str(preflight_data["environment_fingerprint"]),
         source_commit=provenance.source_commit,
         started_at_utc=started,
         ended_at_utc=ended,
@@ -328,7 +351,7 @@ def run_experiment(
     store = ArtifactStore(output)
     store.initialize()
     context = provenance or ProvenanceContext.create(corpus_id=new_corpus_id(workload))
-    preflight = check_environment(strict=strict_preflight, provenance=context)
+    preflight_data = check_environment(strict=strict_preflight, provenance=context)
     run_id = new_run_id(workload, context.experiment_session_id)
     config.update(
         {
@@ -370,7 +393,7 @@ def run_experiment(
         result,
         collector,
         collector_diagnostics,
-        preflight,
+        preflight_data,
         context,
         started,
         ended,
@@ -769,7 +792,7 @@ def run_adversarial_matrix(
     repetitions: int = 1,
     timeout_s: float = 180.0,
     provenance: ProvenanceContext | None = None,
-    workload_names: tuple[str, ...] | None = None,
+    workload_names: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """Collect a bounded adversarial corpus only after benign acceptance and approval."""
     if not adversarial_approval:
@@ -796,10 +819,19 @@ def run_adversarial_matrix(
     context = provenance or ProvenanceContext.create(corpus_id=new_corpus_id("adversarial-matrix"))
     segment_group_id = f"segments-{context.experiment_session_id}"
     plans: list[PlannedRun] = []
-    selected_workloads = workload_names or tuple(adversarial_profile_workloads())
-    if not selected_workloads or len(selected_workloads) != len(set(selected_workloads)):
+
+    # Convert Sequence to list for indexing
+    if workload_names is None:
+        selected_workloads: Sequence[str] = tuple(adversarial_profile_workloads())
+    else:
+        selected_workloads = list(workload_names)
+
+    if len(selected_workloads) == 0 or len(set(selected_workloads)) != len(selected_workloads):
         raise ValueError("adversarial workload_names must be non-empty and unique")
-    for workload in selected_workloads:
+
+    # Now safely iterate over the sequence
+    workload_list = list(selected_workloads)  # Convert to list for safe iteration
+    for workload in workload_list:
         config = get_workload(workload)
         round_name = holdout_plan.round_for(
             family=str(config["family"]),
@@ -1107,7 +1139,7 @@ def run_matrix(
     if matching_summaries:
         if not resume or len(matching_summaries) != 1:
             raise ArtifactExistsError("an exact matrix summary already exists")
-        return matching_summaries[0]
+        return cast(dict[str, Any], matching_summaries[0])
     plan_manifest = _corpus_manifest(context, plans)
     plan_relative = Path(f"corpora/{context.corpus_id}-plan.json")
     plan_path = store.resolve(plan_relative)
@@ -1176,7 +1208,7 @@ def run_matrix(
         raise CalibrationError(
             f"benign matrix blocked by negative calibration; see {calibration['path']}"
         )
-    outcomes = []
+    outcomes: list[dict[str, Any]] = []
     finalized_plans: list[PlannedRun] = []
     for plan in plans:
         name = str(plan.config["workload_name"])
