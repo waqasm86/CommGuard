@@ -1,2 +1,6 @@
 * text=auto eol=lf
 *.ipynb text eol=lf
+
+# Deterministic generated notebook and JSON artifacts
+*.ipynb text eol=lf
+*.json text eol=lf

@@ -1,11 +1,11 @@
 {
   "schema_version": 2,
-  "policy_version": "commguard-notebook-policy-v3",
+  "policy_version": "commguard-notebook-policy-v4",
   "canonical_notebooks": [
     {
       "order": 1,
-      "filename": "commguard_calibration_v3.ipynb",
-      "role": "calibrate dual-T4 telemetry support and accepted payload sensitivity"
+      "filename": "commguard_calibration_v4.ipynb",
+      "role": "run the 0.2-second dual-T4 confirmatory calibration gate"
     },
     {
       "order": 2,
@@ -21,6 +21,12 @@
       "order": 4,
       "filename": "commguard_adversarial_redteam_v1.ipynb",
       "role": "evaluate bounded periodic-synchronization training with a sealed holdout"
+    }
+  ],
+  "historical_notebooks": [
+    {
+      "filename": "commguard_calibration_v3.ipynb",
+      "role": "historical 0.5-second calibration retained for provenance; not the active downstream gate"
     }
   ],
   "diagnostic_notebooks": [

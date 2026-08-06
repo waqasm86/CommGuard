@@ -18,7 +18,7 @@ from commguard.workloads import list_workloads
 
 ROOT = Path(__file__).resolve().parents[1]
 CANONICAL_NOTEBOOKS = [
-    "commguard_calibration_v3.ipynb",
+    "commguard_calibration_v4.ipynb",
     "commguard_benign_corpus_v2.ipynb",
     "commguard_detector_evaluation_v2.ipynb",
     "commguard_adversarial_redteam_v1.ipynb",
@@ -37,13 +37,22 @@ def test_canonical_notebook_inventory_is_valid_and_unexecuted() -> None:
     entries = inventory["canonical_notebooks"]
     names = [entry["filename"] for entry in entries]
     assert inventory["schema_version"] == 2
-    assert inventory["policy_version"] == "commguard-notebook-policy-v3"
+    assert inventory["policy_version"] == "commguard-notebook-policy-v4"
     assert names == CANONICAL_NOTEBOOKS
     assert [entry["order"] for entry in entries] == [1, 2, 3, 4]
     assert all(entry["role"].strip() for entry in entries)
     assert len(names) == len(set(names))
     assert all("-" not in name and name.endswith(".ipynb") for name in names)
     assert (ROOT / "docs/notebook-policy.md").is_file()
+    assert inventory["historical_notebooks"] == [
+        {
+            "filename": "commguard_calibration_v3.ipynb",
+            "role": (
+                "historical 0.5-second calibration retained for provenance; "
+                "not the active downstream gate"
+            ),
+        }
+    ]
     assert inventory["diagnostic_notebooks"] == [
         {
             "filename": "diagnostics/commguard_calibration_v4_sampling_study.ipynb",
@@ -111,7 +120,13 @@ def test_canonical_notebook_inventory_is_valid_and_unexecuted() -> None:
     )
     assert "(1, 4, 16, 64, 128)" in calibration_source
     assert "REPETITIONS = 1 if DEVELOPMENT_SMOKE_ONLY else 5" in calibration_source
+    assert "SAMPLING_INTERVAL_S = 0.2" in calibration_source
     assert "intervals_s=(1.0, 0.5, 0.2)" in calibration_source
+    assert "SCIENTIFIC_ACCEPTANCE_ELIGIBLE" in calibration_source
+    assert "CALIBRATION_ACCEPTED" in calibration_source
+    assert "SOURCE_CLEAN" in calibration_source
+    assert "RESULT_SUPPORTED" in calibration_source
+    assert "MODERN_CAPTURE_GATE_PASSED" in calibration_source
     assert "idle_usable_repetitions" in calibration_source
     assert "exact_calibration_reference_for_next_notebook" in calibration_source
     assert 'shutil.which("nvidia-smi")' in calibration_source
@@ -119,7 +134,7 @@ def test_canonical_notebook_inventory_is_valid_and_unexecuted() -> None:
     assert "torch.distributed.is_nccl_available()" in calibration_source
     assert "memory_total_mib" in calibration_source
     assert calibration_source.count("NOTEBOOK_RUN_ID = datetime.now") == 1
-    assert "commguard-calibration-v3-{NOTEBOOK_RUN_ID}" in calibration_source
+    assert "commguard-calibration-v4-{NOTEBOOK_RUN_ID}" in calibration_source
     assert "ARTIFACTS.mkdir(parents=True, exist_ok=False)" in calibration_source
     assert "environment/notebook-bootstrap.json" in calibration_source
     assert '"source_repository": "commguard-source"' in calibration_source
@@ -160,8 +175,16 @@ def test_canonical_notebooks_match_their_generator() -> None:
 
 
 def test_active_notebook_directory_contains_only_reviewed_workflow() -> None:
-    active = sorted(path.name for path in (ROOT / "notebooks").glob("*.ipynb"))
-    assert active == sorted(CANONICAL_NOTEBOOKS)
+    notebook_root = ROOT / "notebooks"
+    inventory = json.loads((notebook_root / "canonical_notebooks.json").read_text(encoding="utf-8"))
+
+    canonical_names = [entry["filename"] for entry in inventory["canonical_notebooks"]]
+    historical_names = [entry["filename"] for entry in inventory.get("historical_notebooks", [])]
+
+    reviewed_names = sorted([*canonical_names, *historical_names])
+    present_names = sorted(path.name for path in notebook_root.glob("*.ipynb"))
+
+    assert present_names == reviewed_names
     diagnostic = ROOT / "notebooks/diagnostics/commguard_calibration_v4_sampling_study.ipynb"
     notebook = json.loads(diagnostic.read_text(encoding="utf-8"))
     assert notebook["nbformat"] == 4

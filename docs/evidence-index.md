@@ -49,3 +49,13 @@ New evidence must be additive. Record archive name, byte size, SHA-256, reviewed
 source commit, dirty-state decision, input hashes, environment report, corpus
 manifest, result status, and the narrow claims it supports. A corrected analysis
 gets a new archive and index row; old archives remain immutable.
+
+## Calibration-v4 pending evidence
+
+The calibration-v3 full result is retained as immutable evidence of partial
+support at a 0.5-second interval. It does not unlock downstream notebooks.
+
+The next required evidence item is a full canonical
+`commguard_calibration_v4.ipynb` execution using a 0.2-second sampling
+interval. Its output archive and sibling SHA-256 must be preserved regardless
+of whether the scientific gate passes.

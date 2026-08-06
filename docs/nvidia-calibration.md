@@ -41,3 +41,21 @@ Schema-1 results remain readable only through explicitly marked legacy
 compatibility. That label never means the modern idle-aware gate passed and
 does not reinterpret historical evidence. NVML PCIe values remain PCIe traffic
 readings; they are not direct NCCL byte counts.
+
+## Calibration-v4 interval selection
+
+The calibration-v3 full execution used a 0.5-second telemetry interval. It
+completed all planned observations and retained clean provenance, but its
+result was only partially supported. The 1 MiB group achieved two successful
+captures in five repetitions, while the 4, 16, 64, and 128 MiB groups met the
+repetition-aware capture requirement.
+
+The 0.2-second interval was selected prospectively for calibration-v4 using
+the available diagnostic sampling evidence. This selection is not itself an
+accepted calibration result because the diagnostic study did not include the
+critical 1 MiB payload.
+
+Calibration-v4 must therefore test the complete payload set
+`[1, 4, 16, 64, 128]` with five repetitions per payload and five idle
+repetitions. It remains subject to the same idle-derived capture,
+participation, provenance, and scientific-eligibility requirements.
